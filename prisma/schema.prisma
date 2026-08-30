@@ -1,0 +1,359 @@
+// KhidmatConnect AI — Database Schema
+// Milestone 5: Backend Foundation
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ═══════════════════════════════════════════════════════════
+// ENUMS
+// ═══════════════════════════════════════════════════════════
+
+enum Role {
+  CITIZEN
+  OPERATOR
+  RESPONDER
+}
+
+enum Language {
+  EN
+  UR
+}
+
+enum EmergencySource {
+  WEB
+  VOICE_CALL
+}
+
+enum Urgency {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum CaseStatus {
+  NEW
+  UNDER_REVIEW
+  NEEDS_INFORMATION
+  ASSIGNED
+  RESPONDER_ACCEPTED
+  EN_ROUTE
+  ARRIVED
+  COMPLETED
+  CLOSED
+  DUPLICATE
+  UNREACHABLE
+}
+
+enum EmergencyCategory {
+  RESCUE
+  MEDICAL
+  FOOD
+  WATER
+  SHELTER
+  TRANSPORT
+  SUPPLIES
+  OTHER
+}
+
+enum ResourceType {
+  AMBULANCE
+  RESCUE_TEAM
+  MEDICAL_CENTER
+  FOOD_CENTER
+  WATER_POINT
+  SHELTER
+  TRANSPORT
+  SUPPLY_CENTER
+}
+
+enum AvailabilityStatus {
+  AVAILABLE
+  ASSIGNED
+  EN_ROUTE
+  OFFLINE
+  MAINTENANCE
+  LIMITED
+  BUSY
+  CLOSED
+}
+
+enum ResponderType {
+  PARAMEDIC
+  DRIVER
+  COORDINATOR
+  FIELD_RESCUER
+}
+
+enum AssignmentStatus {
+  PENDING
+  ACCEPTED
+  EN_ROUTE
+  ARRIVED
+  COMPLETED
+  CANCELLED
+}
+
+enum CaseUpdateType {
+  CASE_CREATED
+  AI_TRIAGED
+  PRIORITY_CHANGED
+  CATEGORY_CHANGED
+  REQUESTER_INFORMATION_ADDED
+  AMBULANCE_ASSIGNED
+  RESPONDER_ACCEPTED
+  EN_ROUTE
+  ARRIVED
+  COMPLETED
+  OPERATOR_NOTE
+  CASE_CLOSED
+}
+
+enum NormalRequestStatus {
+  SUBMITTED
+  IN_REVIEW
+  COMPLETED
+}
+
+// ═══════════════════════════════════════════════════════════
+// MODELS
+// ═══════════════════════════════════════════════════════════
+
+/// Authenticated users (citizens, operators, responders).
+/// Emergency requesters do NOT require a User record.
+model User {
+  id                String   @id @default(cuid())
+  name              String?
+  email             String?  @unique
+  phone             String?  @unique
+  passwordHash      String?
+  role              Role     @default(CITIZEN)
+  preferredLanguage Language @default(EN)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  // Relations
+  responder      Responder?
+  assignedCases  Assignment[]    @relation("OperatorAssignments")
+  createdUpdates CaseUpdate[]
+  normalRequests NormalRequest[]
+
+  @@map("users")
+}
+
+/// Core emergency case — the central entity of the platform.
+/// AI fields are nullable: intake must work even if AI is unavailable.
+model EmergencyCase {
+  id                String          @id @default(cuid())
+  caseCode          String          @unique // e.g. KC-2026-000001
+  source            EmergencySource
+  primaryContact    String
+  alternateContact  String?
+  originalMessage   String
+  transcript        String?
+  locationText      String?
+  latitude          Float?
+  longitude         Float?
+  locationAccuracy  Float?
+  locationConfirmed Boolean         @default(false)
+  detectedLanguage  String?
+  aiSummary         String?
+  aiReasoning       String?
+  urgency           Urgency?
+  aiConfidence      Float?
+  status            CaseStatus      @default(NEW)
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  closedAt          DateTime?
+
+  // Relations
+  categories   EmergencyCaseCategory[]
+  accessTokens CaseAccessToken[]
+  assignments  Assignment[]
+  updates      CaseUpdate[]
+
+  @@index([status])
+  @@index([createdAt])
+  @@index([urgency])
+  @@map("emergency_cases")
+}
+
+/// Join model: allows multiple categories per case.
+model EmergencyCaseCategory {
+  id       String            @id @default(cuid())
+  caseId   String
+  category EmergencyCategory
+  case     EmergencyCase     @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@unique([caseId, category])
+  @@index([caseId])
+  @@map("emergency_case_categories")
+}
+
+/// Secure no-login 90-day case access token.
+/// Only the hash is stored — raw token returned once at creation.
+model CaseAccessToken {
+  id              String    @id @default(cuid())
+  emergencyCaseId String
+  tokenHash       String    @unique
+  expiresAt       DateTime
+  revokedAt       DateTime?
+  createdAt       DateTime  @default(now())
+
+  emergencyCase EmergencyCase @relation(fields: [emergencyCaseId], references: [id], onDelete: Cascade)
+
+  @@index([tokenHash])
+  @@index([emergencyCaseId])
+  @@index([expiresAt])
+  @@map("case_access_tokens")
+}
+
+/// Humanitarian relief resources (ambulances, shelters, food, etc.)
+model Resource {
+  id                 String             @id @default(cuid())
+  name               String
+  type               ResourceType
+  phone              String?
+  email              String?
+  address            String?
+  latitude           Float?
+  longitude          Float?
+  availabilityStatus AvailabilityStatus @default(AVAILABLE)
+  capacity           String?
+  currentCapacity    String?
+  isDemo             Boolean            @default(false)
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  assignments Assignment[]
+
+  @@index([type])
+  @@index([availabilityStatus])
+  @@map("resources")
+}
+
+/// Field responder / ambulance driver.
+model Responder {
+  id                   String             @id @default(cuid())
+  userId               String             @unique
+  name                 String
+  phone                String
+  responderType        ResponderType
+  availabilityStatus   AvailabilityStatus @default(OFFLINE)
+  currentLatitude      Float?
+  currentLongitude     Float?
+  lastLocationUpdateAt DateTime?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  user            User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ambulances      Ambulance[]
+  assignments     Assignment[]
+  locationHistory ResponderLocation[]
+
+  @@map("responders")
+}
+
+/// Ambulance / vehicle.
+model Ambulance {
+  id                   String             @id @default(cuid())
+  identifier           String             @unique // e.g. AKF-07
+  vehicleNumber        String             @unique
+  responderId          String?
+  availabilityStatus   AvailabilityStatus @default(AVAILABLE)
+  currentLatitude      Float?
+  currentLongitude     Float?
+  lastLocationUpdateAt DateTime?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  responder       Responder?          @relation(fields: [responderId], references: [id], onDelete: SetNull)
+  assignments     Assignment[]
+  locationHistory ResponderLocation[]
+
+  @@map("ambulances")
+}
+
+/// Connects an emergency case with response resources.
+model Assignment {
+  id                   String           @id @default(cuid())
+  emergencyCaseId      String
+  resourceId           String?
+  ambulanceId          String?
+  responderId          String?
+  assignedByOperatorId String
+  status               AssignmentStatus @default(PENDING)
+  assignedAt           DateTime         @default(now())
+  acceptedAt           DateTime?
+  enRouteAt            DateTime?
+  arrivedAt            DateTime?
+  completedAt          DateTime?
+
+  emergencyCase EmergencyCase @relation(fields: [emergencyCaseId], references: [id], onDelete: Cascade)
+  resource      Resource?     @relation(fields: [resourceId], references: [id], onDelete: SetNull)
+  ambulance     Ambulance?    @relation(fields: [ambulanceId], references: [id], onDelete: SetNull)
+  responder     Responder?    @relation(fields: [responderId], references: [id], onDelete: SetNull)
+  operator      User          @relation("OperatorAssignments", fields: [assignedByOperatorId], references: [id])
+
+  @@index([emergencyCaseId])
+  @@index([status])
+  @@map("assignments")
+}
+
+/// Case audit history — tracks every meaningful state change.
+model CaseUpdate {
+  id              String         @id @default(cuid())
+  emergencyCaseId String
+  updateType      CaseUpdateType
+  message         String
+  createdByUserId String?
+  createdAt       DateTime       @default(now())
+
+  emergencyCase EmergencyCase @relation(fields: [emergencyCaseId], references: [id], onDelete: Cascade)
+  createdByUser User?         @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@index([emergencyCaseId, createdAt])
+  @@map("case_updates")
+}
+
+/// Responder/ambulance GPS location history.
+model ResponderLocation {
+  id           String   @id @default(cuid())
+  responderId  String
+  ambulanceId  String?
+  assignmentId String?
+  latitude     Float
+  longitude    Float
+  accuracy     Float?
+  recordedAt   DateTime @default(now())
+
+  responder Responder  @relation(fields: [responderId], references: [id], onDelete: Cascade)
+  ambulance Ambulance? @relation(fields: [ambulanceId], references: [id], onDelete: SetNull)
+
+  @@index([responderId, recordedAt])
+  @@index([recordedAt])
+  @@map("responder_locations")
+}
+
+/// Non-emergency citizen requests (secondary feature).
+model NormalRequest {
+  id        String              @id @default(cuid())
+  userId    String
+  subject   String
+  message   String
+  status    NormalRequestStatus @default(SUBMITTED)
+  createdAt DateTime            @default(now())
+  updatedAt DateTime            @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status])
+  @@map("normal_requests")
+}
