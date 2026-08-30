@@ -1,4 +1,4 @@
-import type { EmergencyCase, ReliefResource } from '@/types';
+import type { EmergencyCase, ReliefResource, CitizenRequest, InboxMessage, AdvisoryNotification } from '@/types';
 
 /**
  * Demo/mock data for development.
@@ -483,3 +483,98 @@ export const mockReliefResources: ReliefResource[] = [
 ];
 
 export const mockActiveBrowserCase: EmergencyCase = initialMockCases[0];
+
+// ─── Demo Citizen Profile ──────────────────────────────────
+export const mockCitizenProfile = {
+  name: 'Ahmed Tariq',
+  nameUr: 'احمد طارق',
+  phone: '0300-8241992',
+  email: 'ahmed.tariq@example.com',
+  preferredLanguage: 'en' as const,
+};
+
+// ─── Demo Citizen Requests (Non-Emergency) ─────────────────
+export const mockCitizenRequests: CitizenRequest[] = [
+  {
+    id: 'NR-2026-0021',
+    subject: 'Food Support Inquiry',
+    subjectUr: 'خوراک کی امداد کے بارے میں استفسار',
+    message: 'We are a displaced family of 6 currently staying at Govt School Relief Camp. Would like to know about ration distribution schedule and eligibility for monthly food support.',
+    status: 'in_review',
+    createdAt: '2 days ago',
+  },
+  {
+    id: 'NR-2026-0018',
+    subject: 'Shelter Information',
+    subjectUr: 'پناہ گاہ کی معلومات',
+    message: 'Looking for long-term shelter options for flood-affected families near Super Highway area. We need information about permanent rehabilitation programs.',
+    status: 'completed',
+    createdAt: 'Aug 25',
+  },
+  {
+    id: 'NR-2026-0015',
+    subject: 'Clean Water Tanker Request',
+    subjectUr: 'صاف پانی کی ٹینکر کی درخواست',
+    message: 'Our colony near Korangi Crossing has had no water supply for 3 days. Requesting a clean water tanker for approximately 200 families.',
+    status: 'submitted',
+    createdAt: 'Aug 28',
+  },
+];
+
+// ─── Demo Citizen Inbox Messages ───────────────────────────
+export const mockInboxMessages: InboxMessage[] = [
+  {
+    id: 'MSG-001',
+    from: 'Operator Fatima',
+    fromUr: 'آپریٹر فاطمہ',
+    preview: 'Your case KC-2026-1048 has been resolved. The patient was safely transferred to NICVD.',
+    previewUr: 'آپ کا کیس KC-2026-1048 حل ہو گیا ہے۔ مریض کو محفوظ طریقے سے NICVD منتقل کر دیا گیا۔',
+    timestamp: '1 hour ago',
+    unread: true,
+    thread: [
+      { sender: 'Operator Fatima', text: 'Your case KC-2026-1048 has been resolved. The patient was safely transferred to NICVD.', time: '1 hour ago' },
+      { sender: 'You', text: 'Thank you so much. Can I get a follow-up report?', time: '45 min ago' },
+      { sender: 'Operator Fatima', text: 'Yes, the case report will be available in your records within 24 hours.', time: '30 min ago' },
+    ],
+  },
+  {
+    id: 'MSG-002',
+    from: 'Alkhidmat Relief Cell',
+    fromUr: 'الخدمت ریلیف سیل',
+    preview: 'Ration distribution at Expo Center tomorrow 9 AM - 2 PM. Bring your CNIC.',
+    previewUr: 'ایکسپو سینٹر پر کل راشن تقسیم، صبح 9 سے دوپہر 2 بجے تک۔ اپنا شناختی کارڈ ساتھ لائیں۔',
+    timestamp: 'Yesterday',
+    unread: true,
+  },
+  {
+    id: 'MSG-003',
+    from: 'Bilal Ahmed (Volunteer)',
+    fromUr: 'بلال احمد (رضاکار)',
+    preview: 'Regarding your food support inquiry — the nearest distribution point is at Sharfabad Center.',
+    previewUr: 'آپ کی خوراک کی درخواست کے حوالے سے — قریب ترین تقسیم مرکز شرف آباد سینٹر ہے۔',
+    timestamp: 'Aug 27',
+    unread: false,
+  },
+];
+
+// ─── Demo Advisory Notifications ───────────────────────────
+export const mockAdvisories: AdvisoryNotification[] = [
+  {
+    id: 'ADV-001',
+    title: 'Sindh Flood Relief Monsoon Advisory',
+    titleUr: 'سندھ سیلاب ریلیف مانسون ایڈوائزری',
+    body: 'Emergency water purifiers and dry rations are currently being distributed at Expo Center Relief Camp.',
+    bodyUr: 'ایکسپو سینٹر ریلیف کیمپ میں ہنگامی پانی کے پیوریفائر اور خشک راشن تقسیم کیا جا رہا ہے۔',
+    timestamp: '1 hour ago',
+    urgent: true,
+  },
+  {
+    id: 'ADV-002',
+    title: 'Rescue 1122 Heatwave Protocol',
+    titleUr: 'ریسکیو 1122 ہیٹ ویو پروٹوکول',
+    body: 'ORS hydration camps deployed across 15 major metro transit stops in Karachi.',
+    bodyUr: 'کراچی کے 15 بڑے ٹرانزٹ اسٹاپوں پر ORS ہائیڈریشن کیمپس لگائے گئے ہیں۔',
+    timestamp: 'Yesterday',
+    urgent: false,
+  },
+];

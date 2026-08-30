@@ -12,6 +12,8 @@ import {
   Phone,
   Globe,
   AlertTriangle,
+  MapPin,
+  LogIn,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -54,6 +56,12 @@ export default function Navigation() {
             {lang === 'ur' ? 'ایمرجنسی' : 'Emergency'}
           </Link>
           <Link
+            href="/nearby"
+            className="px-3 py-1.5 text-sm text-[#8B949E] hover:text-[#E6EDF3] transition-colors rounded-md hover:bg-[#1A1F2B]"
+          >
+            {lang === 'ur' ? 'قریبی' : 'Nearby'}
+          </Link>
+          <Link
             href="/dashboard"
             className="px-3 py-1.5 text-sm text-[#8B949E] hover:text-[#E6EDF3] transition-colors rounded-md hover:bg-[#1A1F2B]"
           >
@@ -92,6 +100,14 @@ export default function Navigation() {
                   >
                     <Phone className="h-4 w-4" />
                     {t.responderApp}
+                  </Link>
+                  <Link
+                    href="/login"
+                    onClick={() => setMoreOpen(false)}
+                    className="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-[#8B949E] hover:bg-[#1A1F2B] hover:text-[#E6EDF3]"
+                  >
+                    <LogIn className="h-4 w-4" />
+                    {t.login}
                   </Link>
                 </motion.div>
               )}
@@ -155,11 +171,25 @@ export default function Navigation() {
                 {lang === 'ur' ? 'ایمرجنسی' : 'Emergency'}
               </Link>
               <Link
+                href="/nearby"
+                onClick={() => setMobileOpen(false)}
+                className="rounded-lg px-4 py-3 text-sm text-[#E6EDF3] hover:bg-[#1A1F2B]"
+              >
+                {lang === 'ur' ? 'قریبی' : 'Nearby'}
+              </Link>
+              <Link
                 href="/dashboard"
                 onClick={() => setMobileOpen(false)}
                 className="rounded-lg px-4 py-3 text-sm text-[#E6EDF3] hover:bg-[#1A1F2B]"
               >
                 {lang === 'ur' ? 'پورٹل' : 'Portal'}
+              </Link>
+              <Link
+                href="/login"
+                onClick={() => setMobileOpen(false)}
+                className="rounded-lg px-4 py-3 text-sm text-[#8B949E] hover:bg-[#1A1F2B]"
+              >
+                {t.login}
               </Link>
               <Link
                 href="/operator"

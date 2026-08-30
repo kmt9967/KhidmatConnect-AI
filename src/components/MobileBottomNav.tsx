@@ -3,13 +3,19 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useLanguage } from '@/i18n/LanguageContext';
-import { Home, MapPin, Phone, User, AlertTriangle } from 'lucide-react';
+import { Home, MapPin, User, AlertTriangle, FileText } from 'lucide-react';
 
 export default function MobileBottomNav() {
   const pathname = usePathname();
   const { lang } = useLanguage();
 
   const isActive = (path: string) => pathname === path;
+
+  // Only show on citizen-facing pages
+  const citizenRoutes = ['/', '/emergency', '/dashboard', '/nearby', '/login', '/case'];
+  const showNav = citizenRoutes.some((r) => pathname === r || pathname.startsWith('/case/'));
+
+  if (!showNav) return null;
 
   return (
     <nav className="fixed bottom-0 left-0 right-0 z-50 border-t border-[#21262D] bg-[#0B0E14]/95 backdrop-blur-md md:hidden safe-area-pb">
@@ -25,13 +31,13 @@ export default function MobileBottomNav() {
         </Link>
 
         <Link
-          href="/dashboard"
+          href="/nearby"
           className={`flex flex-col items-center gap-0.5 px-3 py-1.5 rounded-lg transition-colors ${
-            isActive('/dashboard') ? 'text-[#3FB950]' : 'text-[#6E7681] hover:text-[#8B949E]'
+            isActive('/nearby') ? 'text-[#3FB950]' : 'text-[#6E7681] hover:text-[#8B949E]'
           }`}
         >
           <MapPin className="h-5 w-5" />
-          <span className="text-[10px] font-medium">{lang === 'ur' ? 'کیس' : 'Track'}</span>
+          <span className="text-[10px] font-medium">{lang === 'ur' ? 'قریبی' : 'Nearby'}</span>
         </Link>
 
         <Link
@@ -42,19 +48,19 @@ export default function MobileBottomNav() {
         </Link>
 
         <Link
-          href="/nearby"
-          className={`flex flex-col items-center gap-0.5 px-3 py-1.5 rounded-lg transition-colors ${
-            isActive('/nearby') ? 'text-[#3FB950]' : 'text-[#6E7681] hover:text-[#8B949E]'
-          }`}
-        >
-          <Phone className="h-5 w-5" />
-          <span className="text-[10px] font-medium">{lang === 'ur' ? 'مدد' : 'Help'}</span>
-        </Link>
-
-        <Link
           href="/dashboard"
           className={`flex flex-col items-center gap-0.5 px-3 py-1.5 rounded-lg transition-colors ${
             isActive('/dashboard') ? 'text-[#3FB950]' : 'text-[#6E7681] hover:text-[#8B949E]'
+          }`}
+        >
+          <FileText className="h-5 w-5" />
+          <span className="text-[10px] font-medium">{lang === 'ur' ? 'درخواستیں' : 'Requests'}</span>
+        </Link>
+
+        <Link
+          href="/login"
+          className={`flex flex-col items-center gap-0.5 px-3 py-1.5 rounded-lg transition-colors ${
+            isActive('/login') ? 'text-[#3FB950]' : 'text-[#6E7681] hover:text-[#8B949E]'
           }`}
         >
           <User className="h-5 w-5" />

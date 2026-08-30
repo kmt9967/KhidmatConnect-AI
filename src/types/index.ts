@@ -147,3 +147,38 @@ export interface ReliefResource {
   notes?: string;
   organization?: string;
 }
+
+// ─── Citizen Request (Non-Emergency) ──────────────────────
+export type CitizenRequestStatus = 'submitted' | 'in_review' | 'completed';
+
+export interface CitizenRequest {
+  id: string;
+  subject: string;
+  subjectUr?: string;
+  message: string;
+  status: CitizenRequestStatus;
+  createdAt: string;
+}
+
+// ─── Citizen Inbox ─────────────────────────────────────────
+export interface InboxMessage {
+  id: string;
+  from: string;
+  fromUr?: string;
+  preview: string;
+  previewUr?: string;
+  timestamp: string;
+  unread: boolean;
+  thread?: { sender: string; text: string; time: string }[];
+}
+
+// ─── Advisory / Notification ───────────────────────────────
+export interface AdvisoryNotification {
+  id: string;
+  title: string;
+  titleUr?: string;
+  body: string;
+  bodyUr?: string;
+  timestamp: string;
+  urgent: boolean;
+}
