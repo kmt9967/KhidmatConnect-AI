@@ -103,6 +103,8 @@ enum AssignmentStatus {
 enum CaseUpdateType {
   CASE_CREATED
   AI_TRIAGED
+  AI_ANALYSIS_COMPLETED
+  AI_ANALYSIS_FAILED
   PRIORITY_CHANGED
   CATEGORY_CHANGED
   REQUESTER_INFORMATION_ADDED
@@ -150,27 +152,35 @@ model User {
 /// Core emergency case — the central entity of the platform.
 /// AI fields are nullable: intake must work even if AI is unavailable.
 model EmergencyCase {
-  id                String          @id @default(cuid())
-  caseCode          String          @unique // e.g. KC-2026-000001
-  source            EmergencySource
-  primaryContact    String
-  alternateContact  String?
-  originalMessage   String
-  transcript        String?
-  locationText      String?
-  latitude          Float?
-  longitude         Float?
-  locationAccuracy  Float?
-  locationConfirmed Boolean         @default(false)
-  detectedLanguage  String?
-  aiSummary         String?
-  aiReasoning       String?
-  urgency           Urgency?
-  aiConfidence      Float?
-  status            CaseStatus      @default(NEW)
-  createdAt         DateTime        @default(now())
-  updatedAt         DateTime        @updatedAt
-  closedAt          DateTime?
+  id                   String          @id @default(cuid())
+  caseCode             String          @unique // e.g. KC-2026-000001
+  source               EmergencySource
+  primaryContact       String
+  alternateContact     String?
+  originalMessage      String
+  transcript           String?
+  locationText         String?
+  latitude             Float?
+  longitude            Float?
+  locationAccuracy     Float?
+  locationConfirmed    Boolean         @default(false)
+  detectedLanguage     String?
+  aiSummary            String?
+  aiReasoning          String?
+  urgency              Urgency?
+  aiConfidence         Float?
+  // Extended AI analysis fields (populated by Qwen analysis)
+  keyNeeds             String[]
+  specialNeeds         String[]
+  missingInformation   String[]
+  followUpQuestion     String?
+  potentiallyCritical  Boolean         @default(false)
+  peopleAffected       Int?
+  locationTextDetected String?
+  status               CaseStatus      @default(NEW)
+  createdAt            DateTime        @default(now())
+  updatedAt            DateTime        @updatedAt
+  closedAt             DateTime?
 
   // Relations
   categories   EmergencyCaseCategory[]

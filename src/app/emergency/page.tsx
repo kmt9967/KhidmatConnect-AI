@@ -5,7 +5,6 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useLanguage } from '@/i18n/LanguageContext';
 import { getTranslation } from '@/i18n/translations';
-import { mockActiveBrowserCase } from '@/data/mockData';
 import Navigation from '@/components/Navigation';
 import MobileBottomNav from '@/components/MobileBottomNav';
 import {
@@ -26,6 +25,14 @@ import { motion, AnimatePresence } from 'motion/react';
 
 type GpsState = 'idle' | 'locating' | 'success' | 'error';
 
+const CASE_STORAGE_PREFIX = 'khidmatconnect_case_';
+
+interface StoredCaseRef {
+  caseCode: string;
+  accessToken: string;
+  expiresAt: string;
+}
+
 export default function EmergencyPage() {
   const { lang, isUrdu } = useLanguage();
   const t = getTranslation(lang);
@@ -43,7 +50,25 @@ export default function EmergencyPage() {
   const [isCritical, setIsCritical] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
-  const [hasActiveCase] = useState(true); // Demo: simulate returning user
+  const [newCaseCode, setNewCaseCode] = useState('');
+  const [submitError, setSubmitError] = useState('');
+  const [activeCaseCode, setActiveCaseCode] = useState<string | null>(null);
+
+  // Check for active case in localStorage
+  useEffect(() => {
+    try {
+      const keys = Object.keys(localStorage);
+      const caseKey = keys.find((k) => k.startsWith(CASE_STORAGE_PREFIX));
+      if (caseKey) {
+        const stored: StoredCaseRef = JSON.parse(localStorage.getItem(caseKey) || '');
+        if (stored.caseCode && stored.expiresAt && new Date(stored.expiresAt) > new Date()) {
+          setActiveCaseCode(stored.caseCode);
+        }
+      }
+    } catch {
+      // Ignore localStorage errors
+    }
+  }, []);
 
   // Critical keyword detection
   const criticalKeywordsEn = ['unconscious', 'collapsed', 'dying', 'blood', 'fire', 'shooting', 'breathing', 'heart attack', 'stroke'];
@@ -83,15 +108,52 @@ export default function EmergencyPage() {
     }, 2000);
   };
 
-  // Submit handler (demo only)
-  const handleSubmit = () => {
+  // Submit handler — real backend API call
+  const handleSubmit = async () => {
     if (!location || !message || !primaryPhone) return;
     setIsSubmitting(true);
-    setTimeout(() => {
-      setIsSubmitting(false);
+    setSubmitError('');
+
+    try {
+      const res = await fetch('/api/emergency-cases', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          source: 'WEB',
+          primaryContact: primaryPhone,
+          alternateContact: alternatePhone || undefined,
+          originalMessage: message,
+          locationText: location,
+          categories: ['OTHER'], // AI will refine categories
+        }),
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => null);
+        throw new Error(errData?.error || `Server error: ${res.status}`);
+      }
+
+      const data = await res.json();
+
+      // Store only case reference in localStorage (namespaced)
+      const storageKey = `${CASE_STORAGE_PREFIX}${data.caseCode}`;
+      const storedRef: StoredCaseRef = {
+        caseCode: data.caseCode,
+        accessToken: data.caseAccessToken,
+        expiresAt: data.tokenExpiresAt,
+      };
+      localStorage.setItem(storageKey, JSON.stringify(storedRef));
+
+      setNewCaseCode(data.caseCode);
       setSubmitted(true);
-      // In real app: redirect to /case/[newCaseId]
-    }, 2500);
+    } catch (err) {
+      console.error('Emergency submit error:', err);
+      setSubmitError(
+        err instanceof Error ? err.message : 'Failed to submit emergency request'
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   // Post-submit confirmation screen
@@ -110,11 +172,11 @@ export default function EmergencyPage() {
             </div>
             <h1 className="text-2xl font-bold text-[#E6EDF3]">{t.caseConfirmedTitle}</h1>
             <p className="mt-2 text-sm text-[#8B949E]">
-              {t.caseIdLabel}: <span className="font-mono font-bold text-[#58A6FF]">KC-2026-1050</span>
+              {t.caseIdLabel}: <span className="font-mono font-bold text-[#58A6FF]">{newCaseCode}</span>
             </p>
             <div className="mt-6 flex flex-col gap-3">
               <Link
-                href="/case/KC-2026-1050"
+                href={`/case/${newCaseCode}`}
                 className="rounded-xl bg-gradient-to-r from-[#3FB950] to-[#059669] px-6 py-3 text-sm font-bold text-white shadow-lg shadow-emerald-500/20"
               >
                 {t.trackActiveCase}
@@ -159,7 +221,7 @@ export default function EmergencyPage() {
           </Link>
 
           {/* Active case banner (returning user) */}
-          {hasActiveCase && (
+          {activeCaseCode && (
             <motion.div
               initial={{ opacity: 0, y: -8 }}
               animate={{ opacity: 1, y: 0 }}
@@ -173,11 +235,11 @@ export default function EmergencyPage() {
                   </div>
                   <div>
                     <p className="text-sm font-semibold text-[#3FB950]">{t.activeCaseBanner}</p>
-                    <p className="text-xs text-[#8B949E] font-mono">{mockActiveBrowserCase.id}</p>
+                    <p className="text-xs text-[#8B949E] font-mono">{activeCaseCode}</p>
                   </div>
                 </div>
                 <Link
-                  href={`/case/${mockActiveBrowserCase.id}`}
+                  href={`/case/${activeCaseCode}`}
                   className="rounded-lg bg-[#3FB950]/10 px-3 py-1.5 text-xs font-semibold text-[#3FB950] hover:bg-[#3FB950]/20 transition-colors"
                 >
                   {t.trackActiveCase}
@@ -410,6 +472,11 @@ export default function EmergencyPage() {
                   t.submitButton
                 )}
               </button>
+              {submitError && (
+                <p className="mt-2 text-center text-xs text-[#F85149]">
+                  {lang === 'ur' ? 'جمع کرانے میں ناکام۔ دوبارہ کوشش کریں۔' : 'Failed to submit. Please try again.'}
+                </p>
+              )}
               <p className="mt-2 text-center text-[10px] text-[#6E7681]">
                 {t.browserPersistenceNotice}
               </p>
