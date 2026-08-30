@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/db/prisma';
 import { generateCaseToken } from '@/lib/services/caseTokenService';
 import type { CreateEmergencyCaseInput } from '@/lib/validation/emergencyCase';
+import type { AiAnalysisResponse } from '@/lib/ai/schemas';
 
 /**
  * Generate a human-readable unique case code: KC-YYYY-NNNNNN
@@ -82,6 +83,7 @@ export async function createEmergencyCase(input: CreateEmergencyCaseInput) {
   const { rawToken, tokenExpiresAt } = await generateCaseToken(result.id);
 
   return {
+    id: result.id,
     caseCode: result.caseCode,
     status: result.status,
     createdAt: result.createdAt,
@@ -146,7 +148,7 @@ export async function getCaseByCode(caseCode: string) {
 
   if (!caseRecord) return null;
 
-  // Return requester-safe response
+  // Return requester-safe response (no operator-only AI reasoning, confidence, or internal flags)
   return {
     caseCode: caseRecord.caseCode,
     source: caseRecord.source,
@@ -156,12 +158,85 @@ export async function getCaseByCode(caseCode: string) {
     locationText: caseRecord.locationText,
     categories: caseRecord.categories.map((c) => c.category),
     aiSummary: caseRecord.aiSummary,
+    keyNeeds: caseRecord.keyNeeds,
+    specialNeeds: caseRecord.specialNeeds,
+    missingInformation: caseRecord.missingInformation,
+    followUpQuestion: caseRecord.followUpQuestion,
+    peopleAffected: caseRecord.peopleAffected,
     createdAt: caseRecord.createdAt,
     updatedAt: caseRecord.updatedAt,
     closedAt: caseRecord.closedAt,
     updates: caseRecord.updates,
     assignments: caseRecord.assignments,
   };
+}
+
+/**
+ * Enrich an existing emergency case with AI analysis results.
+ * Updates case fields, replaces categories, and creates audit entry.
+ * Designed to be called AFTER the case creation transaction completes.
+ */
+export async function enrichCaseWithAiAnalysis(
+  caseId: string,
+  analysis: AiAnalysisResponse
+) {
+  // Update case with AI analysis fields + categories + audit in a transaction
+  await prisma.$transaction(async (tx) => {
+    // 1. Update the case with AI results
+    await tx.emergencyCase.update({
+      where: { id: caseId },
+      data: {
+        detectedLanguage: analysis.detectedLanguage,
+        aiSummary: analysis.summary,
+        aiReasoning: analysis.reasoning,
+        urgency: analysis.urgency,
+        aiConfidence: analysis.confidence,
+        keyNeeds: analysis.keyNeeds,
+        specialNeeds: analysis.specialNeeds,
+        missingInformation: analysis.missingInformation,
+        followUpQuestion: analysis.followUpQuestion || null,
+        potentiallyCritical: analysis.potentiallyCritical,
+        peopleAffected: analysis.peopleAffected,
+        locationTextDetected: analysis.locationTextDetected || null,
+      },
+    });
+
+    // 2. Replace categories with AI-detected ones
+    await tx.emergencyCaseCategory.deleteMany({
+      where: { caseId },
+    });
+
+    if (analysis.categories.length > 0) {
+      await tx.emergencyCaseCategory.createMany({
+        data: analysis.categories.map((category) => ({
+          caseId,
+          category,
+        })),
+      });
+    }
+
+    // 3. Create AI_ANALYSIS_COMPLETED audit entry
+    await tx.caseUpdate.create({
+      data: {
+        emergencyCaseId: caseId,
+        updateType: 'AI_ANALYSIS_COMPLETED',
+        message: 'AI triage completed. Human review required before operational action.',
+      },
+    });
+  });
+}
+
+/**
+ * Record an AI analysis failure in the audit trail.
+ */
+export async function recordAiAnalysisFailure(caseId: string, error: string) {
+  await prisma.caseUpdate.create({
+    data: {
+      emergencyCaseId: caseId,
+      updateType: 'AI_ANALYSIS_FAILED',
+      message: `AI analysis failed: ${error.substring(0, 200)}. Human review required.`,
+    },
+  });
 }
 
 /**
