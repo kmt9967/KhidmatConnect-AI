@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import {
   Activity,
   AlertOctagon,
@@ -23,6 +23,10 @@ import { getTranslation } from '@/i18n/translations';
 import { initialMockCases, mockReliefResources } from '@/data/mockData';
 import type { EmergencyCase, UrgencyLevel, EmergencyCategory } from '@/types';
 import InteractiveMap from '@/components/InteractiveMap';
+import GoogleMap from '@/components/maps/GoogleMap';
+import { isGoogleMapsConfigured } from '@/lib/maps/googleMapsLoader';
+import { isLocationUnconfirmed } from '@/lib/maps/distance';
+import type { MapMarkerData } from '@/lib/maps/types';
 import OperatorCaseDrawer from '@/components/operator/OperatorCaseDrawer';
 import Link from 'next/link';
 
@@ -38,13 +42,27 @@ export default function OperatorPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [mobileView, setMobileView] = useState<'map' | 'queue' | 'unconfirmed'>('map');
   const [dismissToast, setDismissToast] = useState(false);
+  const [useGoogleMap, setUseGoogleMap] = useState(false);
+
+  useEffect(() => {
+    setUseGoogleMap(isGoogleMapsConfigured());
+  }, []);
 
   const selectedCase = cases.find((c) => c.id === selectedCaseId) || null;
 
   const criticalCount = cases.filter((c) => c.urgency === 'critical').length;
   const unassignedCount = cases.filter((c) => !c.assignedResource).length;
   const availableRespondersCount = mockReliefResources.filter((r) => r.availability === 'available').length;
-  const unconfirmedCases = cases.filter((c) => c.location.isApproximate || !c.location.coordinates);
+  const unconfirmedCases = cases.filter((c) => {
+    // Use the real location-unconfirmed logic
+    if (isLocationUnconfirmed({
+      latitude: c.location.coordinates?.lat,
+      longitude: c.location.coordinates?.lng,
+      locationConfirmed: !c.location.isApproximate,
+    })) return true;
+    // Also include cases with approximate flag or no coordinates (backward compat)
+    return c.location.isApproximate || !c.location.coordinates;
+  });
   const unconfirmedCount = unconfirmedCases.length;
 
   const standardQueueCases = cases.filter((c) => {
@@ -298,15 +316,58 @@ export default function OperatorPage() {
           )}
 
           <div className="flex-1 rounded-2xl overflow-hidden border border-[#30363D] relative shadow-inner">
-            <InteractiveMap
-              cases={cases}
-              resources={mockReliefResources}
-              selectedCaseId={selectedCaseId}
-              onSelectCase={handleSelectCase}
-              onQuickAssign={handleApproveDispatch}
-              heightClass="h-full min-h-[450px]"
-              lang={lang}
-            />
+            {useGoogleMap ? (
+              <GoogleMap
+                center={selectedCase?.location.coordinates
+                  ? { latitude: selectedCase.location.coordinates.lat, longitude: selectedCase.location.coordinates.lng }
+                  : null}
+                markers={(() => {
+                  const markers: MapMarkerData[] = [];
+                  // Emergency markers
+                  cases.forEach((c) => {
+                    if (c.location.coordinates) {
+                      markers.push({
+                        id: c.id,
+                        type: 'EMERGENCY',
+                        position: { latitude: c.location.coordinates.lat, longitude: c.location.coordinates.lng },
+                        title: `${c.id} • ${c.category.toUpperCase()}`,
+                        subtitle: c.location.name,
+                        urgency: c.urgency === 'critical' ? 'CRITICAL' : c.urgency === 'high' ? 'HIGH' : c.urgency === 'medium' ? 'MEDIUM' : 'LOW',
+                      });
+                    }
+                  });
+                  // Resource markers
+                  mockReliefResources.forEach((r) => {
+                    markers.push({
+                      id: r.id,
+                      type: r.type === 'ambulance' ? 'AMBULANCE' : 'RESOURCE',
+                      position: { latitude: r.coordinates.lat, longitude: r.coordinates.lng },
+                      title: r.name,
+                      subtitle: r.address,
+                      category: r.type,
+                      available: r.availability === 'available',
+                    });
+                  });
+                  return markers;
+                })()}
+                onMarkerClick={(marker) => {
+                  const c = cases.find((c) => c.id === marker.id);
+                  if (c) handleSelectCase(c.id);
+                }}
+                heightClass="h-full min-h-[450px]"
+                className="rounded-2xl"
+              />
+            ) : (
+              <InteractiveMap
+                cases={cases}
+                resources={mockReliefResources}
+                selectedCaseId={selectedCaseId}
+                onSelectCase={handleSelectCase}
+                onQuickAssign={handleApproveDispatch}
+                heightClass="h-full min-h-[450px]"
+                lang={lang}
+              />
+            )}
           </div>
         </div>
 
