@@ -1,4 +1,4 @@
-import type { EmergencyCase, ReliefResource, CitizenRequest, InboxMessage, AdvisoryNotification } from '@/types';
+import type { EmergencyCase, ReliefResource, CitizenRequest, InboxMessage, AdvisoryNotification, TranscriptMessage, VoiceCaseDraft } from '@/types';
 
 /**
  * Demo/mock data for development.
@@ -557,7 +557,81 @@ export const mockInboxMessages: InboxMessage[] = [
   },
 ];
 
-// ─── Demo Advisory Notifications ───────────────────────────
+// ─── Demo Voice AI Conversation ─────────────────────────────
+export const mockConversationTurns: TranscriptMessage[] = [
+  {
+    id: 1,
+    speaker: 'caller',
+    text: 'Assalam o alaikum 1122! Meri ammi achanak gir gayi hain, bilkul behosh hain aur saans mushkil se aa rahi hai! Foran ambulance bhejein!',
+    textUr: 'میری امی بے ہوش ہیں، ہمیں فوراً ایمبولینس چاہیے۔ سانس نہیں لے پا رہیں۔',
+    timestamp: '00:04',
+    detectedLanguage: 'Urdu',
+    extractedSnapshot: {
+      urgency: 'critical',
+      category: 'MEDICAL',
+      need: 'ALS Ambulance & Oxygen Support',
+      people: '1 (Elderly Female)',
+      summary: 'Unconscious female patient in acute respiratory distress. Immediate ambulance requested.',
+      missing: 'Exact street address or landmark',
+    },
+  },
+  {
+    id: 2,
+    speaker: 'ai',
+    text: 'KhidmatConnect AI: Ji, ambulance dispatch ki ja rahi hai. Aap bilkul ghabrayein mat. Barah-e-karam apni mukammal location ya qareeb tareen mashhoor nishan batayein.',
+    textUr: 'جی، ریسکیو الرٹ ہو چکا ہے۔ براہِ کرم اپنی لوکیشن یا قریب ترین نشان بتائیں۔',
+    timestamp: '00:12',
+    detectedLanguage: 'Urdu',
+  },
+  {
+    id: 3,
+    speaker: 'caller',
+    text: 'Hum Gulshan Block 7 mein hain, Disco Bakery ke bilkul peechay Street 4, Flat B-12!',
+    textUr: 'ہم گلشن بلاک 7 کے پاس ہیں، ڈسکو بیکری کے پیچھے۔ گلی 4 فلیٹ B-12۔',
+    timestamp: '00:23',
+    detectedLanguage: 'Mixed Urdu-English',
+    extractedSnapshot: {
+      location: 'Gulshan Block 7 (Near Disco Bakery, Street 4, Flat B-12)',
+      urgency: 'critical',
+      category: 'MEDICAL',
+      need: 'ALS Ambulance (Defibrillator + Oxygen)',
+      people: '1 Patient (Elderly female, unconscious)',
+      summary: 'Unconscious female patient. Ambulance requested near Gulshan Block 7, Disco Bakery.',
+    },
+  },
+  {
+    id: 4,
+    speaker: 'ai',
+    text: 'KhidmatConnect AI: Location confirmed: Gulshan Block 7, near Disco Bakery. Rescue 1122 Unit AKF-07 is on the way with oxygen. Please keep patient lying flat on her side.',
+    textUr: 'لوکیشن تصدیق ہو گئی: گلشن بلاک 7، ڈسکو بیکری۔ ریسکیو یونٹ 1122 روانہ کر دیا گیا ہے۔ مریضہ کو کروٹ کے بل لٹائیں۔',
+    timestamp: '00:34',
+    detectedLanguage: 'Mixed Urdu-English',
+  },
+  {
+    id: 5,
+    speaker: 'caller',
+    text: 'JazakAllah! Hum building ke neechay kharay ho kar ambulance ka wait kar rahay hain.',
+    textUr: 'جزاک اللہ! ہم بلڈنگ کے گیٹ پر انتظار کر رہے ہیں۔',
+    timestamp: '00:41',
+    detectedLanguage: 'Urdu',
+  },
+];
+
+// ─── Demo Voice Case Draft ─────────────────────────────────
+export const mockVoiceCaseDraft: VoiceCaseDraft = {
+  id: 'KC-2026-1058',
+  urgency: 'critical',
+  category: 'MEDICAL',
+  need: 'ALS Ambulance with Oxygen Support',
+  location: 'Gulshan Block 7 (Near Disco Bakery)',
+  people: '1 Patient (Elderly female, unconscious)',
+  contact: '+92 300 8241992',
+  status: 'Case Pre-Created',
+  aiSummaryEn: 'Unconscious female patient. Ambulance requested near Gulshan Block 7.',
+  aiSummaryUr: 'بے ہوش خاتون مریضہ۔ گلشن بلاک 7 کے قریب ایمبولینس کی فوری ضرورت۔',
+  missingInfo: 'Exact floor / flat number',
+  confidence: 'High (96%)',
+};
 export const mockAdvisories: AdvisoryNotification[] = [
   {
     id: 'ADV-001',

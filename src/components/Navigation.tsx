@@ -14,6 +14,7 @@ import {
   AlertTriangle,
   MapPin,
   LogIn,
+  Radio,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -108,6 +109,14 @@ export default function Navigation() {
                   >
                     <LogIn className="h-4 w-4" />
                     {t.login}
+                  </Link>
+                  <Link
+                    href="/voice-ai"
+                    onClick={() => setMoreOpen(false)}
+                    className="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-[#8B949E] hover:bg-[#1A1F2B] hover:text-[#E6EDF3]"
+                  >
+                    <Radio className="h-4 w-4" />
+                    {lang === 'ur' ? 'وائس AI' : 'Voice AI'}
                   </Link>
                 </motion.div>
               )}
@@ -204,6 +213,13 @@ export default function Navigation() {
                 className="rounded-lg px-4 py-3 text-sm text-[#8B949E] hover:bg-[#1A1F2B]"
               >
                 {t.responderApp}
+              </Link>
+              <Link
+                href="/voice-ai"
+                onClick={() => setMobileOpen(false)}
+                className="rounded-lg px-4 py-3 text-sm text-[#8B949E] hover:bg-[#1A1F2B]"
+              >
+                {lang === 'ur' ? 'وائس AI' : 'Voice AI'}
               </Link>
               <div className="mt-2 pt-2 border-t border-[#21262D]">
                 <Link

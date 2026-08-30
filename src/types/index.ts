@@ -182,3 +182,42 @@ export interface AdvisoryNotification {
   timestamp: string;
   urgent: boolean;
 }
+
+// ─── Voice AI ──────────────────────────────────────────────
+export type VoiceCallPhase = 'idle' | 'ringing' | 'active' | 'dropped' | 'completed';
+export type AiVoiceState = 'listening' | 'thinking' | 'speaking' | 'muted';
+export type VoiceCaseStatus = 'Capturing Information' | 'Case Pre-Created' | 'Case Sent to Operator' | 'UNDER REVIEW';
+export type VoiceConfidence = 'High (96%)' | 'Medium (78%)' | 'Low (Requires Review)';
+
+export interface TranscriptMessage {
+  id: number;
+  speaker: 'caller' | 'ai';
+  text: string;
+  textUr?: string;
+  timestamp: string;
+  detectedLanguage: 'Urdu' | 'English' | 'Mixed Urdu-English';
+  extractedSnapshot?: {
+    location?: string;
+    urgency?: 'critical' | 'high' | 'medium';
+    category?: string;
+    need?: string;
+    people?: string;
+    summary?: string;
+    missing?: string;
+  };
+}
+
+export interface VoiceCaseDraft {
+  id: string;
+  urgency: 'critical' | 'high' | 'medium';
+  category: string;
+  need: string;
+  location: string;
+  people: string;
+  contact: string;
+  status: VoiceCaseStatus;
+  aiSummaryEn: string;
+  aiSummaryUr: string;
+  missingInfo: string | null;
+  confidence: VoiceConfidence;
+}
