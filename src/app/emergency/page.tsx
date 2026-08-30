@@ -22,6 +22,8 @@ import {
   MessageSquare,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { getCurrentPosition } from '@/lib/maps/geolocation';
+import type { GeolocationResult } from '@/lib/maps/types';
 
 type GpsState = 'idle' | 'locating' | 'success' | 'error';
 
@@ -53,6 +55,11 @@ export default function EmergencyPage() {
   const [newCaseCode, setNewCaseCode] = useState('');
   const [submitError, setSubmitError] = useState('');
   const [activeCaseCode, setActiveCaseCode] = useState<string | null>(null);
+
+  // Real geolocation state
+  const [geoCoords, setGeoCoords] = useState<{ latitude: number; longitude: number; accuracy?: number } | null>(null);
+  const [locationConfirmed, setLocationConfirmed] = useState(false);
+  const [geoStatusMessage, setGeoStatusMessage] = useState('');
 
   // Check for active case in localStorage
   useEffect(() => {
@@ -93,19 +100,55 @@ export default function EmergencyPage() {
     }
   }, [message, detectCritical]);
 
-  // GPS simulation
-  const handleGps = () => {
+  // Real geolocation via browser Geolocation API
+  const handleGps = async () => {
     setGpsState('locating');
-    setTimeout(() => {
-      const success = Math.random() > 0.3;
-      if (success) {
-        setGpsState('success');
-        setLocation('Plot B-42, Street 9, Gulshan-e-Iqbal Block 4, Karachi');
-      } else {
-        setGpsState('error');
-        setLocation('');
+    setGeoStatusMessage('');
+
+    const result: GeolocationResult = await getCurrentPosition();
+
+    if (result.status === 'SUCCESS' && result.latitude != null && result.longitude != null) {
+      setGpsState('success');
+      setGeoCoords({
+        latitude: result.latitude,
+        longitude: result.longitude,
+        accuracy: result.accuracy,
+      });
+      setLocationConfirmed(true);
+
+      // Try reverse geocoding for a readable address (non-blocking)
+      try {
+        const res = await fetch('/api/maps/reverse-geocode', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ latitude: result.latitude, longitude: result.longitude }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.formattedAddress) {
+            setLocation(data.formattedAddress);
+          }
+        }
+      } catch {
+        // Reverse geocoding failure is non-critical — keep coordinates
       }
-    }, 2000);
+
+      // If location text is still empty, show coordinates
+      if (!location) {
+        setLocation(`${result.latitude.toFixed(5)}, ${result.longitude.toFixed(5)}`);
+      }
+    } else {
+      setGpsState('error');
+      setGeoCoords(null);
+      setLocationConfirmed(false);
+      const messages: Record<string, string> = {
+        DENIED: 'Location permission denied. You can enter your location manually.',
+        UNAVAILABLE: 'Location unavailable. You can enter your location manually.',
+        TIMEOUT: 'Location request timed out. You can try again or enter manually.',
+        UNSUPPORTED: 'Your browser does not support location. Please enter manually.',
+      };
+      setGeoStatusMessage(messages[result.status] || 'Could not detect location.');
+    }
   };
 
   // Submit handler — real backend API call
@@ -115,17 +158,29 @@ export default function EmergencyPage() {
     setSubmitError('');
 
     try {
+      const payload: Record<string, unknown> = {
+        source: 'WEB',
+        primaryContact: primaryPhone,
+        alternateContact: alternatePhone || undefined,
+        originalMessage: message,
+        locationText: location,
+        categories: ['OTHER'], // AI will refine categories
+      };
+
+      // Include GPS coordinates if available
+      if (geoCoords) {
+        payload.latitude = geoCoords.latitude;
+        payload.longitude = geoCoords.longitude;
+        payload.locationConfirmed = locationConfirmed;
+        if (geoCoords.accuracy != null) {
+          payload.locationAccuracy = geoCoords.accuracy;
+        }
+      }
+
       const res = await fetch('/api/emergency-cases', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          source: 'WEB',
-          primaryContact: primaryPhone,
-          alternateContact: alternatePhone || undefined,
-          originalMessage: message,
-          locationText: location,
-          categories: ['OTHER'], // AI will refine categories
-        }),
+        body: JSON.stringify(payload),
       });
 
       if (!res.ok) {
@@ -310,6 +365,15 @@ export default function EmergencyPage() {
                 {gpsState === 'success' && t.gpsDetected}
                 {gpsState === 'error' && t.gpsError}
               </button>
+              {geoStatusMessage && gpsState === 'error' && (
+                <p className="mt-1 text-[11px] text-[#D29922]">{geoStatusMessage}</p>
+              )}
+              {gpsState === 'success' && geoCoords && (
+                <p className="mt-1 text-[11px] text-[#3FB950]">
+                  GPS: {geoCoords.latitude.toFixed(5)}, {geoCoords.longitude.toFixed(5)}
+                  {geoCoords.accuracy != null && ` (±${Math.round(geoCoords.accuracy)}m)`}
+                </p>
+              )}
             </motion.div>
 
             {/* Emergency Message */}

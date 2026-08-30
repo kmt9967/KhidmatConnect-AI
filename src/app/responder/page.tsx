@@ -29,6 +29,10 @@ import { getTranslation } from '@/i18n/translations';
 import { initialMockCases } from '@/data/mockData';
 import type { EmergencyCase } from '@/types';
 import InteractiveMap from '@/components/InteractiveMap';
+import GoogleMap from '@/components/maps/GoogleMap';
+import { getCurrentPosition } from '@/lib/maps/geolocation';
+import { isGoogleMapsConfigured } from '@/lib/maps/googleMapsLoader';
+import type { GeoPoint, MapMarkerData } from '@/lib/maps/types';
 import ResponderCaseDetailsSheet from '@/components/responder/ResponderCaseDetailsSheet';
 import ResponderSupportModal from '@/components/responder/ResponderSupportModal';
 
@@ -69,6 +73,26 @@ export default function ResponderPage() {
   const [isNoteSaved, setIsNoteSaved] = useState(false);
   const [notificationToast, setNotificationToast] = useState<string | null>(null);
   const [navStepIndex, setNavStepIndex] = useState(0);
+
+  // Local responder location (foundation only — not persisted to backend)
+  const [responderLocation, setResponderLocation] = useState<GeoPoint | null>(null);
+  const [responderLocationStatus, setResponderLocationStatus] = useState<'unknown' | 'available' | 'denied' | 'unavailable'>('unknown');
+  const [useGoogleMap, setUseGoogleMap] = useState(false);
+
+  useEffect(() => {
+    setUseGoogleMap(isGoogleMapsConfigured());
+    // Attempt to get local location for demo display
+    getCurrentPosition().then((result) => {
+      if (result.status === 'SUCCESS' && result.latitude != null && result.longitude != null) {
+        setResponderLocation({ latitude: result.latitude, longitude: result.longitude });
+        setResponderLocationStatus('available');
+      } else if (result.status === 'DENIED') {
+        setResponderLocationStatus('denied');
+      } else {
+        setResponderLocationStatus('unavailable');
+      }
+    });
+  }, []);
 
   const turnDirections = [
     isUrdu ? '300 میٹر بعد راشد منہاس روڈ پر دائیں مڑیں' : 'Turn right in 300 m on Rashid Minhas Rd',
@@ -202,7 +226,23 @@ export default function ResponderPage() {
                   <div className="pt-4 border-t border-[#30363D] grid grid-cols-2 gap-2 text-left text-xs font-mono">
                     <div className="p-2.5 rounded-xl bg-[#0B0E14] border border-[#30363D]/60 space-y-0.5">
                       <span className="text-[10px] text-gray-400 block">GPS TELEMETRY</span>
-                      <span className="text-emerald-400 font-bold flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400" /><span>Ready (±5m)</span></span>
+                      <span className={`font-bold flex items-center gap-1 ${
+                        responderLocationStatus === 'available' ? 'text-emerald-400' :
+                        responderLocationStatus === 'denied' ? 'text-amber-400' :
+                        'text-gray-400'
+                      }`}>
+                        <span className={`w-1.5 h-1.5 rounded-full ${
+                          responderLocationStatus === 'available' ? 'bg-emerald-400' :
+                          responderLocationStatus === 'denied' ? 'bg-amber-400' :
+                          'bg-gray-400'
+                        }`} />
+                        <span>
+                          {responderLocationStatus === 'available' ? 'Location available' :
+                           responderLocationStatus === 'denied' ? 'Permission denied' :
+                           responderLocationStatus === 'unavailable' ? 'Unavailable' :
+                           'Detecting...'}
+                        </span>
+                      </span>
                     </div>
                     <div className="p-2.5 rounded-xl bg-[#0B0E14] border border-[#30363D]/60 space-y-0.5">
                       <span className="text-[10px] text-gray-400 block">SHIFT STATUS</span>
@@ -276,7 +316,23 @@ export default function ResponderPage() {
                 )}
 
                 <div className="relative flex-1 min-h-[280px] sm:min-h-[320px]">
-                  <InteractiveMap singleCaseMode={currentCase} heightClass="h-full min-h-[280px] sm:min-h-[320px]" lang={lang} showLayersControl={false} />
+                  {useGoogleMap && currentCase.location.coordinates ? (
+                    <GoogleMap
+                      center={responderLocation || { latitude: currentCase.location.coordinates.lat, longitude: currentCase.location.coordinates.lng }}
+                      markers={[{
+                        id: currentCase.id,
+                        type: 'EMERGENCY' as const,
+                        position: { latitude: currentCase.location.coordinates.lat, longitude: currentCase.location.coordinates.lng },
+                        title: currentCase.id,
+                        subtitle: currentCase.location.name,
+                        urgency: 'CRITICAL',
+                      }]}
+                      heightClass="h-full min-h-[280px] sm:min-h-[320px]"
+                      className="rounded-xl"
+                    />
+                  ) : (
+                    <InteractiveMap singleCaseMode={currentCase} heightClass="h-full min-h-[280px] sm:min-h-[320px]" lang={lang} showLayersControl={false} />
+                  )}
                   <div className="absolute top-3 left-3 right-3 flex items-center justify-between pointer-events-none z-10">
                     <div className="px-3 py-1.5 rounded-xl bg-[#0B0E14]/95 backdrop-blur-md border border-emerald-500/50 text-xs font-mono font-bold text-emerald-300 shadow-xl flex items-center gap-1.5">
                       <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" /><span>ETA: 6 MIN • 2.4 KM</span>
@@ -421,10 +477,29 @@ export default function ResponderPage() {
           <div className="flex-1 flex flex-col p-3 space-y-3">
             <div className="flex items-center justify-between px-1">
               <h3 className="text-sm font-bold text-white flex items-center gap-1.5"><NavIcon className="w-4 h-4 text-blue-400" /><span>{isUrdu ? 'لائیو نقشہ' : 'Live Navigation Map'}</span></h3>
-              <div className="text-[10px] font-mono text-emerald-400 flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" /><span>LIVE GPS</span></div>
+              <div className={`text-[10px] font-mono flex items-center gap-1 ${responderLocationStatus === 'available' ? 'text-emerald-400' : 'text-amber-400'}`}>
+                <span className={`w-2 h-2 rounded-full ${responderLocationStatus === 'available' ? 'bg-emerald-400 animate-ping' : 'bg-amber-400'}`} />
+                <span>{responderLocationStatus === 'available' ? 'LIVE GPS' : 'GPS PENDING'}</span>
+              </div>
             </div>
             <div className="flex-1 rounded-2xl overflow-hidden border border-[#30363D] relative min-h-[420px]">
-              <InteractiveMap singleCaseMode={currentCase} heightClass="h-full min-h-[420px]" lang={lang} showLayersControl={true} />
+              {useGoogleMap && currentCase.location.coordinates ? (
+                <GoogleMap
+                  center={responderLocation || { latitude: currentCase.location.coordinates.lat, longitude: currentCase.location.coordinates.lng }}
+                  markers={[{
+                    id: currentCase.id,
+                    type: 'EMERGENCY' as const,
+                    position: { latitude: currentCase.location.coordinates.lat, longitude: currentCase.location.coordinates.lng },
+                    title: currentCase.id,
+                    subtitle: currentCase.location.name,
+                    urgency: currentCase.urgency === 'critical' ? 'CRITICAL' : currentCase.urgency === 'high' ? 'HIGH' : undefined,
+                  }]}
+                  heightClass="h-full min-h-[420px]"
+                  className="rounded-2xl"
+                />
+              ) : (
+                <InteractiveMap singleCaseMode={currentCase} heightClass="h-full min-h-[420px]" lang={lang} showLayersControl={true} />
+              )}
             </div>
           </div>
         )}

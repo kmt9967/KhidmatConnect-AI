@@ -19,6 +19,7 @@ export const createEmergencyCaseSchema = z.object({
   latitude: z.number().min(-90).max(90).optional(),
   longitude: z.number().min(-180).max(180).optional(),
   locationAccuracy: z.number().min(0).max(100000).optional(),
+  locationConfirmed: z.boolean().optional(),
   categories: z
     .array(z.enum(['RESCUE', 'MEDICAL', 'FOOD', 'WATER', 'SHELTER', 'TRANSPORT', 'SUPPLIES', 'OTHER']))
     .min(1, 'At least one category is required')

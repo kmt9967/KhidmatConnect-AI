@@ -8,6 +8,9 @@ import { getTranslation } from '@/i18n/translations';
 import Navigation from '@/components/Navigation';
 import MobileBottomNav from '@/components/MobileBottomNav';
 import InteractiveMap from '@/components/InteractiveMap';
+import GoogleMap from '@/components/maps/GoogleMap';
+import { isGoogleMapsConfigured } from '@/lib/maps/googleMapsLoader';
+import type { MapMarkerData } from '@/lib/maps/types';
 import {
   ArrowLeft,
   Copy,
@@ -48,6 +51,9 @@ interface ApiCaseData {
   urgency: string | null;
   originalMessage: string;
   locationText: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  locationConfirmed: boolean;
   categories: string[];
   aiSummary: string | null;
   keyNeeds: string[];
@@ -524,8 +530,52 @@ export default function CaseStatusPage() {
               </AnimatePresence>
             </div>
 
-            {/* Right column: Details */}
+            {/* Right column: Map & Details */}
             <div className="lg:col-span-2 space-y-5">
+              {/* Location Map */}
+              {caseData.latitude != null && caseData.longitude != null && isGoogleMapsConfigured() && (
+                <motion.div
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.05 }}
+                >
+                  <GoogleMap
+                    center={{ latitude: caseData.latitude, longitude: caseData.longitude }}
+                    zoom={15}
+                    markers={[{
+                      id: caseData.caseCode,
+                      type: 'EMERGENCY' as const,
+                      position: { latitude: caseData.latitude!, longitude: caseData.longitude! },
+                      title: caseData.caseCode,
+                      subtitle: caseData.locationText || undefined,
+                      urgency: caseData.urgency as 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | undefined,
+                    }]}
+                    heightClass="h-[250px]"
+                    className="rounded-xl"
+                    interactive={false}
+                  />
+                  {!caseData.locationConfirmed && (
+                    <p className="mt-1.5 text-[10px] text-[#D29922] text-center">
+                      {lang === 'ur' ? 'مقام کی تصدیق کوآرڈینیٹر کر رہا ہے' : 'Location is being confirmed by the coordinator'}
+                    </p>
+                  )}
+                </motion.div>
+              )}
+              {caseData.latitude == null && caseData.locationText && (
+                <motion.div
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.05 }}
+                  className="rounded-xl border border-[#21262D] bg-[#11151C] p-4 text-center"
+                >
+                  <MapPin className="mx-auto h-6 w-6 text-[#6E7681] mb-2" />
+                  <p className="text-xs text-[#8B949E]">
+                    {lang === 'ur' ? 'مقام کی تصدیق کوآرڈینیٹر کر رہا ہے' : 'Location is being confirmed by the coordinator'}
+                  </p>
+                  <p className="mt-1 text-sm text-[#E6EDF3]">{caseData.locationText}</p>
+                </motion.div>
+              )}
+
               {/* Expandable Details */}
               <motion.div
                 initial={{ opacity: 0, y: 8 }}

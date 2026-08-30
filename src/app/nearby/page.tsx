@@ -1,13 +1,18 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useLanguage } from '@/i18n/LanguageContext';
 import { getTranslation } from '@/i18n/translations';
 import { mockReliefResources } from '@/data/mockData';
 import type { ReliefResource, ResourceType } from '@/types';
 import InteractiveMap from '@/components/InteractiveMap';
+import GoogleMap from '@/components/maps/GoogleMap';
 import MobileBottomNav from '@/components/MobileBottomNav';
+import { getCurrentPosition } from '@/lib/maps/geolocation';
+import { haversineDistance, formatDistance } from '@/lib/maps/distance';
+import { isGoogleMapsConfigured } from '@/lib/maps/googleMapsLoader';
+import type { GeoPoint, MapMarkerData } from '@/lib/maps/types';
 import {
   AlertTriangle,
   MapPin,
@@ -29,7 +34,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
-type LocationState = 'detected' | 'manual' | 'unavailable';
+type LocationState = 'detected' | 'manual' | 'unavailable' | 'detecting';
 
 export default function NearbyPage() {
   const { lang, isUrdu, toggleLang } = useLanguage();
@@ -39,7 +44,22 @@ export default function NearbyPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [viewMode, setViewMode] = useState<'list' | 'map'>('list');
   const [selectedResource, setSelectedResource] = useState<ReliefResource | null>(null);
-  const [locationState] = useState<LocationState>('detected');
+  const [locationState, setLocationState] = useState<LocationState>('detecting');
+  const [userLocation, setUserLocation] = useState<GeoPoint | null>(null);
+  const [useGoogleMap, setUseGoogleMap] = useState(false);
+
+  // Detect user location on mount
+  useEffect(() => {
+    setUseGoogleMap(isGoogleMapsConfigured());
+    getCurrentPosition().then((result) => {
+      if (result.status === 'SUCCESS' && result.latitude != null && result.longitude != null) {
+        setUserLocation({ latitude: result.latitude, longitude: result.longitude });
+        setLocationState('detected');
+      } else {
+        setLocationState('unavailable');
+      }
+    });
+  }, []);
 
   const filterTabs: { id: string; label: string; icon: typeof Compass }[] = [
     { id: 'all', label: t.nearbyFilterAll, icon: Compass },
@@ -63,12 +83,36 @@ export default function NearbyPage() {
       );
     }
     return true;
+  }).map((r) => {
+    // Calculate real distance if user location is available
+    let computedDistance = r.distance; // fallback to mock
+    if (userLocation) {
+      const dist = haversineDistance(userLocation, { latitude: r.coordinates.lat, longitude: r.coordinates.lng });
+      computedDistance = formatDistance(dist) + ' away';
+    }
+    return { ...r, computedDistance };
+  }).sort((a, b) => {
+    // Sort by distance (parse numeric value)
+    const parseDist = (d: string) => parseFloat(d.replace(/[^0-9.]/g, '')) || 999;
+    return parseDist(a.computedDistance) - parseDist(b.computedDistance);
   });
+
+  // Build map markers for Google Map
+  const mapMarkers: MapMarkerData[] = filteredResources.map((r) => ({
+    id: r.id,
+    type: 'RESOURCE' as const,
+    position: { latitude: r.coordinates.lat, longitude: r.coordinates.lng },
+    title: r.name,
+    subtitle: r.address,
+    category: r.type,
+    available: r.availability === 'available',
+  }));
 
   const locationLabel = {
     detected: t.nearbyLocationDetected,
     manual: t.nearbyLocationManual,
     unavailable: t.nearbyLocationUnavailable,
+    detecting: lang === 'ur' ? 'مقام کا پتہ لگایا جا رہا ہے...' : 'Detecting location...',
   };
 
   const availabilityColor = (a: string) => {
@@ -190,12 +234,25 @@ export default function NearbyPage() {
         {/* Map View */}
         {viewMode === 'map' && (
           <div className="rounded-2xl overflow-hidden border border-[#21262D] shadow-xl mb-4">
-            <InteractiveMap
-              resources={filteredResources}
-              heightClass="h-[400px] sm:h-[480px]"
-              lang={lang}
-              showLayersControl
-            />
+            {useGoogleMap ? (
+              <GoogleMap
+                center={userLocation}
+                markers={mapMarkers}
+                onMarkerClick={(marker) => {
+                  const res = mockReliefResources.find((r) => r.id === marker.id);
+                  if (res) setSelectedResource(res);
+                }}
+                heightClass="h-[400px] sm:h-[480px]"
+                className="rounded-2xl"
+              />
+            ) : (
+              <InteractiveMap
+                resources={filteredResources}
+                heightClass="h-[400px] sm:h-[480px]"
+                lang={lang}
+                showLayersControl
+              />
+            )}
           </div>
         )}
 
@@ -245,7 +302,7 @@ export default function NearbyPage() {
                     <div className="flex items-center gap-3 text-[10px] text-[#6E7681] mb-3 flex-wrap">
                       <span className="flex items-center gap-1">
                         <Compass className="h-3 w-3" />
-                        {res.distance}
+                        {res.computedDistance}
                       </span>
                       {res.organization && (
                         <span>{res.organization}</span>
@@ -337,7 +394,9 @@ export default function NearbyPage() {
                 <div className="rounded-xl bg-[#0B0E14] border border-[#21262D] p-3 space-y-1">
                   <span className="text-[10px] text-[#6E7681] font-mono uppercase">{t.nearbyAddressLabel}</span>
                   <p className="text-[#E6EDF3] font-medium">{isUrdu && selectedResource.addressUr ? selectedResource.addressUr : selectedResource.address}</p>
-                  <p className="text-[10px] text-[#6E7681]">{selectedResource.distance}</p>
+                  <p className="text-[10px] text-[#6E7681]">
+                    {filteredResources.find((r) => r.id === selectedResource.id)?.computedDistance || selectedResource.distance}
+                  </p>
                 </div>
 
                 <div className="rounded-xl bg-[#0B0E14] border border-[#21262D] p-3 space-y-1">
