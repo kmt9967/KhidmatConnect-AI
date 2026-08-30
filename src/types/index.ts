@@ -1,0 +1,149 @@
+// ─── Language ───────────────────────────────────────────────
+export type Language = 'en' | 'ur';
+
+// ─── Urgency ────────────────────────────────────────────────
+export type UrgencyLevel = 'critical' | 'high' | 'medium' | 'low';
+
+// ─── Category ───────────────────────────────────────────────
+export type EmergencyCategory =
+  | 'medical'
+  | 'rescue'
+  | 'food'
+  | 'shelter'
+  | 'water'
+  | 'fire'
+  | 'flood'
+  | 'general';
+
+// ─── Case Status ────────────────────────────────────────────
+export type CaseStatus =
+  | 'submitted'
+  | 'ai_reviewed'
+  | 'operator_reviewing'
+  | 'resource_assigned'
+  | 'en_route'
+  | 'arrived'
+  | 'completed';
+
+// ─── Source ──────────────────────────────────────────────────
+export type EmergencySource = 'web' | 'voice_call' | 'sms' | 'operator';
+
+// ─── Location ────────────────────────────────────────────────
+export interface LocationInfo {
+  name: string;
+  coordinates?: {
+    lat: number;
+    lng: number;
+  };
+  isApproximate: boolean;
+  addressDetail?: string;
+  city?: string;
+}
+
+// ─── Requester ───────────────────────────────────────────────
+export interface RequesterInfo {
+  name?: string;
+  phone: string;
+  alternatePhone?: string;
+}
+
+// ─── AI Analysis ─────────────────────────────────────────────
+export interface AiAnalysis {
+  summary: string;
+  summaryUr?: string;
+  reasoning: string;
+  keyNeeds: string[];
+  peopleCount?: number;
+  specialNeeds?: string;
+  detectedLanguage: string;
+  confidence: number;
+  missingInfo?: string[];
+  suggestedFollowUp?: string;
+}
+
+// ─── Assigned Resource ───────────────────────────────────────
+export interface AssignedResource {
+  id: string;
+  name: string;
+  type: string;
+  plateNumber?: string;
+  responderName: string;
+  responderPhone: string;
+  etaMinutes: number;
+  currentCoords?: {
+    lat: number;
+    lng: number;
+  };
+  distanceKm: number;
+}
+
+// ─── Voice Transcript ────────────────────────────────────────
+export interface VoiceTranscript {
+  fullText: string;
+  audioLength: string;
+  durationSeconds: number;
+  isDroppedCall: boolean;
+  callTime: string;
+}
+
+// ─── Timeline Step ───────────────────────────────────────────
+export interface TimelineStep {
+  step: CaseStatus;
+  label: string;
+  labelUr: string;
+  time: string;
+  completed: boolean;
+  current?: boolean;
+  note?: string;
+}
+
+// ─── Emergency Case ──────────────────────────────────────────
+export interface EmergencyCase {
+  id: string;
+  urgency: UrgencyLevel;
+  category: EmergencyCategory;
+  status: CaseStatus;
+  location: LocationInfo;
+  requester: RequesterInfo;
+  rawMessage: string;
+  timestamp: string;
+  source: EmergencySource;
+  aiAnalysis: AiAnalysis;
+  assignedResource?: AssignedResource;
+  voiceTranscript?: VoiceTranscript;
+  timeline: TimelineStep[];
+  operatorNotes?: string[];
+  dynamicFollowUpAnswer?: string;
+}
+
+// ─── Resource Types ──────────────────────────────────────────
+export type ResourceType =
+  | 'medical'
+  | 'ambulance'
+  | 'food'
+  | 'shelter'
+  | 'water'
+  | 'rescue'
+  | 'supplies';
+
+// ─── Relief Resource ─────────────────────────────────────────
+export interface ReliefResource {
+  id: string;
+  name: string;
+  nameUr?: string;
+  type: ResourceType;
+  verified: boolean;
+  availability: 'available' | 'busy' | 'limited' | 'closed';
+  phone: string;
+  address: string;
+  addressUr?: string;
+  distance: string;
+  coordinates: {
+    lat: number;
+    lng: number;
+  };
+  capacity?: string;
+  stock?: string;
+  notes?: string;
+  organization?: string;
+}

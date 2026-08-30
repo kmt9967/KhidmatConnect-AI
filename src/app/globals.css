@@ -1,0 +1,129 @@
+@import "tailwindcss";
+
+/* ─── Dark Emergency-Tech Theme ─────────────────────────── */
+:root {
+  --color-primary: #059669;
+  --color-primary-dark: #047857;
+  --color-accent: #dc2626;
+  --color-accent-dark: #b91c1c;
+  --bg-base: #0B0E14;
+  --bg-surface: #11151C;
+  --bg-elevated: #1A1F2B;
+  --bg-card: #141922;
+  --border-default: #21262D;
+  --border-subtle: #30363D;
+  --text-primary: #E6EDF3;
+  --text-secondary: #8B949E;
+  --text-muted: #6E7681;
+  --text-accent-emerald: #3FB950;
+  --text-accent-blue: #58A6FF;
+  --text-accent-rose: #F85149;
+  --text-accent-amber: #D29922;
+  --text-accent-purple: #BC8CFF;
+}
+
+body {
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-jakarta), system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ─── Urdu / RTL Font ───────────────────────────────────── */
+[dir="rtl"] body,
+[dir="rtl"] * {
+  font-family: var(--font-arabic), var(--font-jakarta), system-ui, sans-serif;
+}
+
+/* ─── Custom Scrollbar ──────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg-base);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-subtle);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* ─── Animations ────────────────────────────────────────── */
+@keyframes pulse-ring {
+  0% {
+    transform: scale(0.33);
+    opacity: 1;
+  }
+  80%, 100% {
+    transform: scale(1.2);
+    opacity: 0;
+  }
+}
+
+@keyframes radar-sweep {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+@keyframes float-up {
+  0% {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ─── Glow Utilities ────────────────────────────────────── */
+.glow-blue {
+  box-shadow: 0 0 20px rgba(88, 166, 255, 0.15), 0 0 6px rgba(88, 166, 255, 0.1);
+}
+.glow-emerald {
+  box-shadow: 0 0 20px rgba(63, 185, 80, 0.15), 0 0 6px rgba(63, 185, 80, 0.1);
+}
+.glow-rose {
+  box-shadow: 0 0 20px rgba(248, 81, 73, 0.15), 0 0 6px rgba(248, 81, 73, 0.1);
+}
+.glow-amber {
+  box-shadow: 0 0 20px rgba(210, 153, 34, 0.15), 0 0 6px rgba(210, 153, 34, 0.1);
+}
+.glow-purple {
+  box-shadow: 0 0 20px rgba(188, 140, 255, 0.15), 0 0 6px rgba(188, 140, 255, 0.1);
+}
+
+/* ─── Background Patterns ───────────────────────────────── */
+.bg-dot-pattern {
+  background-image: radial-gradient(circle, rgba(139, 148, 158, 0.08) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+/* ─── Focus Ring ────────────────────────────────────────── */
+*:focus-visible {
+  outline: 2px solid var(--text-accent-blue);
+  outline-offset: 2px;
+}
+
+/* ─── Selection ─────────────────────────────────────────── */
+::selection {
+  background: rgba(88, 166, 255, 0.25);
+  color: var(--text-primary);
+}
