@@ -30,6 +30,46 @@ import type { MapMarkerData } from '@/lib/maps/types';
 import OperatorCaseDrawer from '@/components/operator/OperatorCaseDrawer';
 import Link from 'next/link';
 
+// ─── Milestone 8: Real API types ────────────────────────────
+interface ApiActiveCase {
+  id: string;
+  caseCode: string;
+  status: string;
+  urgency: string;
+  locationText: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  locationConfirmed: boolean;
+  categories: string[];
+  createdAt: string;
+  assignments: {
+    id: string;
+    status: string;
+    responder: {
+      id: string;
+      name: string;
+      phone: string;
+      latitude: number | null;
+      longitude: number | null;
+      availabilityStatus: string;
+    } | null;
+    ambulance: {
+      id: string;
+      identifier: string;
+      latitude: number | null;
+      longitude: number | null;
+      availabilityStatus: string;
+    } | null;
+  }[];
+}
+
+interface ApiAssignmentResult {
+  assignmentId: string;
+  caseCode: string;
+  responderName: string;
+  ambulanceName?: string;
+}
+
 export default function OperatorPage() {
   const { lang, isUrdu, toggleLang } = useLanguage();
   const t = getTranslation(lang);
@@ -44,8 +84,35 @@ export default function OperatorPage() {
   const [dismissToast, setDismissToast] = useState(false);
   const [useGoogleMap, setUseGoogleMap] = useState(false);
 
+  // ─── Milestone 8: Real API state ──────────────────────────
+  const [apiActiveCases, setApiActiveCases] = useState<ApiActiveCase[]>([]);
+  const [apiCasesLoaded, setApiCasesLoaded] = useState(false);
+
   useEffect(() => {
     setUseGoogleMap(isGoogleMapsConfigured());
+  }, []);
+
+  // ─── Milestone 8: Poll active cases from API ─────────────
+  useEffect(() => {
+    async function fetchActiveCases() {
+      try {
+        const res = await fetch('/api/operator/cases');
+        if (res.ok) {
+          const data = await res.json();
+          setApiActiveCases(data.cases || []);
+          setApiCasesLoaded(true);
+        } else {
+          setApiCasesLoaded(true);
+        }
+      } catch {
+        // API unavailable — fall back to mock data
+        setApiCasesLoaded(true);
+      }
+    }
+
+    fetchActiveCases();
+    const interval = setInterval(fetchActiveCases, 10000);
+    return () => clearInterval(interval);
   }, []);
 
   const selectedCase = cases.find((c) => c.id === selectedCaseId) || null;
@@ -91,7 +158,37 @@ export default function OperatorPage() {
     setIsDrawerOpen(true);
   }, []);
 
-  const handleApproveDispatch = useCallback((caseId: string, resourceId: string) => {
+  const handleApproveDispatch = useCallback(async (caseId: string, resourceId: string) => {
+    // ─── Milestone 8: Try real assignment API first ──────
+    // caseId is the mock case ID (e.g. 'KC-2026-1048').
+    // The real API uses caseCode. Try to find a matching real case.
+    const realCase = apiActiveCases.find((c) => c.caseCode === caseId);
+    if (realCase) {
+      try {
+        // Find available responder from API data
+        const availableResponder = await fetch(`/api/operator/cases/${caseId}/assign`)
+          .then((r) => r.ok ? r.json() : null)
+          .catch(() => null);
+        if (availableResponder?.responders?.length > 0) {
+          const res = await fetch(`/api/operator/cases/${caseId}/assign`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              responderId: availableResponder.responders[0].id,
+              ambulanceId: availableResponder.ambulances?.[0]?.id,
+            }),
+          });
+          if (res.ok) {
+            const result: ApiAssignmentResult = await res.json();
+            // Assignment succeeded via real API
+          }
+        }
+      } catch {
+        // Fall through to mock dispatch
+      }
+    }
+
+    // Mock dispatch (preserves existing demo behavior)
     setCases((prev) =>
       prev.map((c) => {
         if (c.id !== caseId) return c;
@@ -113,7 +210,7 @@ export default function OperatorPage() {
         };
       })
     );
-  }, []);
+  }, [apiActiveCases]);
 
   const handleChangeUrgency = useCallback((caseId: string, newUrgency: UrgencyLevel) => {
     setCases((prev) => prev.map((c) => (c.id === caseId ? { ...c, urgency: newUrgency } : c)));
@@ -346,6 +443,31 @@ export default function OperatorPage() {
                       subtitle: r.address,
                       category: r.type,
                       available: r.availability === 'available',
+                    });
+                  });
+                  // ─── Milestone 8: Real responder/ambulance markers from API ───
+                  apiActiveCases.forEach((c) => {
+                    c.assignments.forEach((a) => {
+                      if (a.responder?.latitude && a.responder?.longitude) {
+                        markers.push({
+                          id: `resp-${a.responder.id}`,
+                          type: 'RESOURCE',
+                          position: { latitude: a.responder.latitude, longitude: a.responder.longitude },
+                          title: a.responder.name,
+                          subtitle: a.status,
+                          available: a.responder.availabilityStatus === 'AVAILABLE',
+                        });
+                      }
+                      if (a.ambulance?.latitude && a.ambulance?.longitude) {
+                        markers.push({
+                          id: `amb-${a.ambulance.id}`,
+                          type: 'AMBULANCE',
+                          position: { latitude: a.ambulance.latitude, longitude: a.ambulance.longitude },
+                          title: a.ambulance.identifier,
+                          subtitle: a.status,
+                          available: a.ambulance.availabilityStatus === 'AVAILABLE',
+                        });
+                      }
                     });
                   });
                   return markers;

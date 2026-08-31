@@ -36,6 +36,22 @@ import type { GeoPoint, MapMarkerData } from '@/lib/maps/types';
 import ResponderCaseDetailsSheet from '@/components/responder/ResponderCaseDetailsSheet';
 import ResponderSupportModal from '@/components/responder/ResponderSupportModal';
 
+// ─── Milestone 8: Real assignment API types ────────────────
+interface ApiAssignment {
+  assignmentId: string;
+  status: string;
+  caseCode: string;
+  urgency: string;
+  categories: string[];
+  locationText: string;
+  caseLatitude: number | null;
+  caseLongitude: number | null;
+  requesterContact: string | null;
+  summary: string | null;
+  ambulance: { identifier: string; vehicleNumber: string } | null;
+  resource: { name: string; type: string } | null;
+}
+
 type ResponderState = 'available' | 'assigned' | 'accepted' | 'en_route' | 'arrived' | 'completed';
 
 export default function ResponderPage() {
@@ -74,6 +90,12 @@ export default function ResponderPage() {
   const [notificationToast, setNotificationToast] = useState<string | null>(null);
   const [navStepIndex, setNavStepIndex] = useState(0);
 
+  // ─── Milestone 8: Real assignment state ──────────────────
+  const [apiAssignment, setApiAssignment] = useState<ApiAssignment | null>(null);
+  const [hasRealAssignment, setHasRealAssignment] = useState(false);
+  const [isTrackingActive, setIsTrackingActive] = useState(false);
+  const [locationSharingStatus, setLocationSharingStatus] = useState<'off' | 'active' | 'error'>('off');
+
   // Local responder location (foundation only — not persisted to backend)
   const [responderLocation, setResponderLocation] = useState<GeoPoint | null>(null);
   const [responderLocationStatus, setResponderLocationStatus] = useState<'unknown' | 'available' | 'denied' | 'unavailable'>('unknown');
@@ -94,6 +116,98 @@ export default function ResponderPage() {
     });
   }, []);
 
+  // ─── Milestone 8: Poll for current assignment ─────────────
+  useEffect(() => {
+    const DEMO_RESPONDER_ID = 'demo-responder-ahmed';
+    const responderId = typeof window !== 'undefined'
+      ? (localStorage.getItem('demo_responder_id') || DEMO_RESPONDER_ID)
+      : DEMO_RESPONDER_ID;
+
+    async function pollAssignment() {
+      try {
+        const res = await fetch(`/api/responder/assignments/current?responderId=${encodeURIComponent(responderId)}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.assignment) {
+            setApiAssignment(data.assignment);
+            setHasRealAssignment(true);
+            // Sync responder state with API assignment status
+            const statusMap: Record<string, ResponderState> = {
+              PENDING: 'assigned',
+              ACCEPTED: 'accepted',
+              EN_ROUTE: 'en_route',
+              ARRIVED: 'arrived',
+            };
+            const mapped = statusMap[data.assignment.status];
+            if (mapped) setResponderState(mapped);
+            if (data.assignment.status === 'COMPLETED') {
+              setResponderState('completed');
+              setIsTrackingActive(false);
+              setLocationSharingStatus('off');
+            }
+          } else {
+            setApiAssignment(null);
+            setHasRealAssignment(false);
+          }
+        }
+      } catch {
+        // API unavailable — fall back to local demo state
+      }
+    }
+
+    pollAssignment();
+    const interval = setInterval(pollAssignment, 10000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // ─── Milestone 8: GPS tracking (15-second interval) ───────
+  // Tracking only runs while assignment is active (PENDING/ACCEPTED/EN_ROUTE/ARRIVED).
+  // Stops on COMPLETED, unmount, or when no active assignment exists.
+  useEffect(() => {
+    const activeStates = ['assigned', 'accepted', 'en_route', 'arrived'];
+    if (!hasRealAssignment || !apiAssignment || !activeStates.includes(responderState)) {
+      setIsTrackingActive(false);
+      setLocationSharingStatus((prev) => (prev === 'active' ? 'off' : prev));
+      return;
+    }
+
+    setIsTrackingActive(true);
+    setLocationSharingStatus('active');
+
+    async function sendLocation() {
+      try {
+        const result = await getCurrentPosition();
+        if (result.status === 'SUCCESS' && result.latitude != null && result.longitude != null) {
+          setResponderLocation({ latitude: result.latitude, longitude: result.longitude });
+          setResponderLocationStatus('available');
+          await fetch('/api/responder/location', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              responderId: apiAssignment!.assignmentId ? 'demo-responder-ahmed' : '',
+              assignmentId: apiAssignment!.assignmentId,
+              latitude: result.latitude,
+              longitude: result.longitude,
+              accuracy: result.accuracy ?? undefined,
+            }),
+          });
+        } else if (result.status === 'DENIED') {
+          setResponderLocationStatus('denied');
+        }
+      } catch {
+        setLocationSharingStatus('error');
+      }
+    }
+
+    sendLocation();
+    const interval = setInterval(sendLocation, 15000);
+    return () => {
+      clearInterval(interval);
+      setIsTrackingActive(false);
+      setLocationSharingStatus('off');
+    };
+  }, [hasRealAssignment, apiAssignment, responderState]);
+
   const turnDirections = [
     isUrdu ? '300 میٹر بعد راشد منہاس روڈ پر دائیں مڑیں' : 'Turn right in 300 m on Rashid Minhas Rd',
     isUrdu ? '800 میٹر بعد گلشن چورنگی پر سیدھے جائیں' : 'Continue straight through Gulshan Chowrangi for 800 m',
@@ -107,20 +221,62 @@ export default function ResponderPage() {
     }
   }, [notificationToast]);
 
-  const handleAcceptAssignment = () => {
+  const handleAcceptAssignment = async () => {
+    if (apiAssignment) {
+      try {
+        const res = await fetch(`/api/responder/assignments/${apiAssignment.assignmentId}/status`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ newStatus: 'ACCEPTED' }),
+        });
+        if (!res.ok) { const d = await res.json(); throw new Error(d.error); }
+      } catch (e) { setNotificationToast(e instanceof Error ? e.message : 'Failed'); return; }
+    }
     setResponderState('accepted');
     setNotificationToast(isUrdu ? 'کیس قبول کر لیا گیا!' : 'Assignment Accepted! Start navigation when ready.');
   };
-  const handleStartNavigation = () => {
+  const handleStartNavigation = async () => {
+    if (apiAssignment) {
+      try {
+        const res = await fetch(`/api/responder/assignments/${apiAssignment.assignmentId}/status`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ newStatus: 'EN_ROUTE' }),
+        });
+        if (!res.ok) { const d = await res.json(); throw new Error(d.error); }
+      } catch (e) { setNotificationToast(e instanceof Error ? e.message : 'Failed'); return; }
+    }
     setResponderState('en_route');
     setNotificationToast(isUrdu ? 'راستے میں مارک • لائیو GPS فعال' : 'Marked En Route • Live GPS Navigation Active');
   };
-  const handleMarkArrived = () => {
+  const handleMarkArrived = async () => {
+    if (apiAssignment) {
+      try {
+        const res = await fetch(`/api/responder/assignments/${apiAssignment.assignmentId}/status`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ newStatus: 'ARRIVED' }),
+        });
+        if (!res.ok) { const d = await res.json(); throw new Error(d.error); }
+      } catch (e) { setNotificationToast(e instanceof Error ? e.message : 'Failed'); return; }
+    }
     setResponderState('arrived');
     setNotificationToast(isUrdu ? 'موقع پر پہنچ گئے' : 'Arrived at scene confirmed.');
   };
-  const handleCompleteResponse = () => {
+  const handleCompleteResponse = async () => {
+    if (apiAssignment) {
+      try {
+        const res = await fetch(`/api/responder/assignments/${apiAssignment.assignmentId}/status`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ newStatus: 'COMPLETED' }),
+        });
+        if (!res.ok) { const d = await res.json(); throw new Error(d.error); }
+      } catch (e) { setNotificationToast(e instanceof Error ? e.message : 'Failed'); return; }
+    }
     setResponderState('completed');
+    setIsTrackingActive(false);
+    setLocationSharingStatus('off');
     setNotificationToast(isUrdu ? 'امدادی کارروائی مکمل' : 'Response completed.');
   };
   const handleReturnToAvailable = () => {
@@ -134,7 +290,20 @@ export default function ResponderPage() {
     setSirensActive(true);
     setNotificationToast(isUrdu ? 'نئی ہنگامی کال موصول!' : 'New Emergency Assignment Alert Received!');
   };
-  const handleSendSupportRequest = () => {
+  const handleSendSupportRequest = async (type?: string, details?: string) => {
+    if (apiAssignment) {
+      try {
+        await fetch('/api/responder/support', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            assignmentId: apiAssignment.assignmentId,
+            requestType: type || 'OTHER',
+            details: details || 'Support requested by responder',
+          }),
+        });
+      } catch { /* non-blocking */ }
+    }
     setNotificationToast(t.supportRequestedToast);
   };
 
@@ -348,8 +517,18 @@ export default function ResponderPage() {
                     </a>
                   </div>
                   <div className="absolute bottom-3 left-3 z-10">
-                    <div className="px-2.5 py-1 rounded-xl bg-[#0B0E14]/95 backdrop-blur-md border border-[#30363D] text-[10px] font-mono text-emerald-400 font-semibold flex items-center gap-1.5">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" /><span>{t.gpsStatusReady}</span>
+                    <div className={`px-2.5 py-1 rounded-xl bg-[#0B0E14]/95 backdrop-blur-md border text-[10px] font-mono font-semibold flex items-center gap-1.5 ${
+                      isTrackingActive
+                        ? 'border-emerald-500/40 text-emerald-400'
+                        : 'border-[#30363D] text-gray-400'
+                    }`}>
+                      <span className={`w-1.5 h-1.5 rounded-full ${
+                        isTrackingActive ? 'bg-emerald-400 animate-ping' : 'bg-gray-400'
+                      }`} />
+                      <span>{isTrackingActive
+                        ? (isUrdu ? 'لائیو لوکیشن شیئرنگ فعال' : 'Live Location Sharing ON')
+                        : (isUrdu ? 'لوکیشن شیئرنگ بند' : 'Location sharing off')
+                      }</span>
                     </div>
                   </div>
                 </div>

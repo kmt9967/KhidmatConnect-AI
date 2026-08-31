@@ -26,6 +26,9 @@ import {
   FileText,
   Loader2,
   XCircle,
+  Ambulance,
+  Navigation as NavIcon,
+  User,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -66,6 +69,37 @@ interface ApiCaseData {
   closedAt: string | null;
   updates: CaseUpdate[];
   assignments: unknown[];
+}
+
+// ─── Milestone 8: Realtime tracking types ──────────────────
+interface TrackingAssignment {
+  id: string;
+  status: string;
+  assignedAt: string;
+  acceptedAt: string | null;
+  enRouteAt: string | null;
+  arrivedAt: string | null;
+  responder: {
+    name: string;
+    latitude: number | null;
+    longitude: number | null;
+    lastUpdateAt: string | null;
+  } | null;
+  ambulance: {
+    identifier: string;
+    latitude: number | null;
+    longitude: number | null;
+    lastUpdateAt: string | null;
+  } | null;
+}
+
+interface TrackingData {
+  caseCode: string;
+  status: string;
+  urgency: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  assignments: TrackingAssignment[];
 }
 
 const urgencyConfig: Record<string, { color: string; bg: string; border: string; label: string }> = {
@@ -116,6 +150,12 @@ export default function CaseStatusPage() {
   const [showAddInfo, setShowAddInfo] = useState(false);
   const [addInfoText, setAddInfoText] = useState('');
   const [sendingUpdate, setSendingUpdate] = useState(false);
+
+  // ─── Milestone 8: Realtime tracking polling ──────────────
+  // Polls /api/realtime/cases/[caseCode] every 10 seconds for
+  // assignment status, responder/ambulance positions.
+  const [trackingData, setTrackingData] = useState<TrackingData | null>(null);
+  const [trackingError, setTrackingError] = useState(false);
 
   // Fetch case data from API
   useEffect(() => {
@@ -168,6 +208,30 @@ export default function CaseStatusPage() {
 
     fetchCase();
   }, [caseId]);
+
+  // ─── Milestone 8: Poll realtime tracking data ────────────
+  useEffect(() => {
+    if (!caseData) return;
+
+    async function fetchTracking() {
+      try {
+        const res = await fetch(`/api/realtime/cases/${caseId}`);
+        if (res.ok) {
+          const data: TrackingData = await res.json();
+          setTrackingData(data);
+          setTrackingError(false);
+        } else {
+          setTrackingError(true);
+        }
+      } catch {
+        setTrackingError(true);
+      }
+    }
+
+    fetchTracking();
+    const interval = setInterval(fetchTracking, 10000);
+    return () => clearInterval(interval);
+  }, [caseId, caseData]);
 
   const handleCopyId = () => {
     navigator.clipboard?.writeText(caseId);
@@ -400,6 +464,73 @@ export default function CaseStatusPage() {
                 )}
               </motion.div>
 
+              {/* ─── Milestone 8: Assignment / Tracking Info ─── */}
+              <motion.div
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.12 }}
+                className="rounded-xl border border-[#21262D] bg-[#11151C] p-5"
+              >
+                {trackingData && trackingData.assignments.length > 0 ? (
+                  <div className="space-y-3">
+                    <h2 className="text-sm font-bold text-[#E6EDF3] flex items-center gap-2">
+                      <NavIcon className="h-4 w-4 text-[#3FB950]" />
+                      {isUrdu ? 'امدادی دستہ' : 'Response Team'}
+                    </h2>
+                    {trackingData.assignments.map((a) => (
+                      <div key={a.id} className="space-y-2">
+                        {/* Assignment status badge */}
+                        <div className="flex items-center gap-2">
+                          <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-bold ${
+                            a.status === 'EN_ROUTE' ? 'border-blue-500/30 bg-blue-500/10 text-blue-400' :
+                            a.status === 'ARRIVED' ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400' :
+                            a.status === 'ACCEPTED' ? 'border-amber-500/30 bg-amber-500/10 text-amber-400' :
+                            'border-[#30363D] bg-[#1A1F2B] text-[#8B949E]'
+                          }`}>
+                            {statusLabels[a.status]?.[isUrdu ? 'ur' : 'en'] || a.status}
+                          </span>
+                          {a.responder?.lastUpdateAt && (
+                            <span className="text-[10px] text-[#6E7681] font-mono">
+                              {isUrdu ? 'آخری اپ ڈیٹ' : 'Last update'}: {new Date(a.responder.lastUpdateAt).toLocaleTimeString('en-PK', { hour: '2-digit', minute: '2-digit' })}
+                            </span>
+                          )}
+                        </div>
+                        {/* Responder info */}
+                        {a.responder && (
+                          <div className="flex items-center gap-2 rounded-lg bg-[#0B0E14] px-3 py-2">
+                            <User className="h-4 w-4 text-[#58A6FF]" />
+                            <span className="text-sm text-[#E6EDF3] font-medium">{a.responder.name}</span>
+                          </div>
+                        )}
+                        {/* Ambulance info */}
+                        {a.ambulance && (
+                          <div className="flex items-center gap-2 rounded-lg bg-[#0B0E14] px-3 py-2">
+                            <Ambulance className="h-4 w-4 text-[#3FB950]" />
+                            <span className="text-sm text-[#E6EDF3] font-medium">{a.ambulance.identifier}</span>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-center py-3">
+                    <div className="flex items-center justify-center gap-2 text-[#8B949E]">
+                      <Clock className="h-4 w-4 text-[#58A6FF]" />
+                      <p className="text-sm">
+                        {isUrdu
+                          ? 'کوآرڈینیٹر آپ کی درخواست کا جائزہ لے رہا ہے۔'
+                          : 'Coordinator is reviewing your request.'}
+                      </p>
+                    </div>
+                    <p className="mt-1 text-xs text-[#6E7681]">
+                      {isUrdu
+                        ? 'امدادی دستہ تفویض ہونے پر یہاں دکھایا جائے گا۔'
+                        : 'Response team will appear here once assigned.'}
+                    </p>
+                  </div>
+                )}
+              </motion.div>
+
               {/* AI Follow-up Question */}
               {caseData.followUpQuestion && (
                 <motion.div
@@ -542,14 +673,42 @@ export default function CaseStatusPage() {
                   <GoogleMap
                     center={{ latitude: caseData.latitude, longitude: caseData.longitude }}
                     zoom={15}
-                    markers={[{
-                      id: caseData.caseCode,
-                      type: 'EMERGENCY' as const,
-                      position: { latitude: caseData.latitude!, longitude: caseData.longitude! },
-                      title: caseData.caseCode,
-                      subtitle: caseData.locationText || undefined,
-                      urgency: caseData.urgency as 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | undefined,
-                    }]}
+                    markers={(() => {
+                      const markers: import('@/lib/maps/types').MapMarkerData[] = [{
+                        id: caseData.caseCode,
+                        type: 'EMERGENCY' as const,
+                        position: { latitude: caseData.latitude!, longitude: caseData.longitude! },
+                        title: caseData.caseCode,
+                        subtitle: caseData.locationText || undefined,
+                        urgency: caseData.urgency as 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | undefined,
+                      }];
+                      // Add responder/ambulance markers from tracking data
+                      if (trackingData?.assignments) {
+                        trackingData.assignments.forEach((a) => {
+                          if (a.responder?.latitude && a.responder?.longitude) {
+                            markers.push({
+                              id: `responder-${a.id}`,
+                              type: 'RESOURCE',
+                              position: { latitude: a.responder.latitude, longitude: a.responder.longitude },
+                              title: a.responder.name,
+                              subtitle: a.status,
+                              available: true,
+                            });
+                          }
+                          if (a.ambulance?.latitude && a.ambulance?.longitude) {
+                            markers.push({
+                              id: `ambulance-${a.id}`,
+                              type: 'AMBULANCE',
+                              position: { latitude: a.ambulance.latitude, longitude: a.ambulance.longitude },
+                              title: a.ambulance.identifier,
+                              subtitle: a.status,
+                              available: true,
+                            });
+                          }
+                        });
+                      }
+                      return markers;
+                    })()}
                     heightClass="h-[250px]"
                     className="rounded-xl"
                     interactive={false}
