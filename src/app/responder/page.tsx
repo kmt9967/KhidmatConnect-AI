@@ -122,14 +122,9 @@ export default function ResponderPage() {
 
   // ─── Milestone 8: Poll for current assignment ─────────────
   useEffect(() => {
-    const DEMO_RESPONDER_ID = 'demo-responder-ahmed';
-    const responderId = typeof window !== 'undefined'
-      ? (localStorage.getItem('demo_responder_id') || DEMO_RESPONDER_ID)
-      : DEMO_RESPONDER_ID;
-
     async function pollAssignment() {
       try {
-        const res = await fetch(`/api/responder/assignments/current?responderId=${encodeURIComponent(responderId)}`);
+        const res = await fetch('/api/responder/assignments/current');
         if (res.ok) {
           const data = await res.json();
           if (data.assignment) {
@@ -188,7 +183,6 @@ export default function ResponderPage() {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              responderId: apiAssignment!.assignmentId ? 'demo-responder-ahmed' : '',
               assignmentId: apiAssignment!.assignmentId,
               latitude: result.latitude,
               longitude: result.longitude,
@@ -443,7 +437,39 @@ export default function ResponderPage() {
             )}
 
             {/* ASSIGNED STATE - NEW ALERT */}
-            {responderState === 'assigned' && (
+            {responderState === 'assigned' && apiAssignment && (
+              <div className="p-4 sm:p-5 flex-1 flex flex-col justify-between space-y-4 animate-in zoom-in-95">
+                <div className="p-5 rounded-3xl bg-gradient-to-b from-red-950/80 via-[#11161F] to-[#11161F] border-2 border-red-500/60 shadow-2xl space-y-4 relative overflow-hidden">
+                  <div className="absolute -top-10 -right-10 w-32 h-32 bg-red-600/20 rounded-full blur-2xl pointer-events-none" />
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 text-red-400 font-black text-xs tracking-wider uppercase">
+                      <AlertOctagon className="w-4 h-4 animate-bounce text-red-400" /><span>{t.newEmergencyAssignment}</span>
+                    </div>
+                    <span className="px-2.5 py-0.5 rounded-full bg-red-600 text-white font-mono font-black text-xs tracking-wider border border-red-400 shadow">{apiAssignment.urgency} • {apiAssignment.categories.join(', ')}</span>
+                  </div>
+                  <div className="space-y-1">
+                    <div className="font-mono text-2xl font-black text-white tracking-tight">{apiAssignment.caseCode}</div>
+                    <div className="text-base font-bold text-gray-100 flex items-center gap-1.5">
+                      <MapPin className="w-4 h-4 text-red-400 shrink-0" /><span>{apiAssignment.locationText || 'Location provided'}</span>
+                    </div>
+                  </div>
+                  {apiAssignment.summary && (
+                    <div className="text-xs text-gray-300 leading-relaxed font-medium bg-[#161B22] p-3 rounded-xl border border-[#30363D]">&quot;{apiAssignment.summary}&quot;</div>
+                  )}
+                </div>
+                <div className="space-y-2.5 pt-2">
+                  <Link href={`/responder/cases/${apiAssignment.caseCode}`} className="w-full py-4 px-6 rounded-2xl bg-red-600 hover:bg-red-500 text-white font-black text-base tracking-wide shadow-2xl shadow-red-900/60 ring-2 ring-red-500/60 active:scale-95 transition-all flex items-center justify-center gap-2 min-h-[56px]">
+                    <Check className="w-5 h-5" /><span>{t.acceptAssignment} &amp; View Case</span>
+                  </Link>
+                  <button onClick={handleAcceptAssignment} className="w-full py-3.5 px-4 rounded-2xl bg-[#11161F] hover:bg-[#161B22] border border-[#30363D] text-gray-300 font-bold text-xs flex items-center justify-center gap-2 transition-colors min-h-[44px]">
+                    <Check className="w-4 h-4 text-emerald-400" /><span>{t.acceptAssignment}</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* ASSIGNED STATE - fallback when no real API assignment */}
+            {responderState === 'assigned' && !apiAssignment && (
               <div className="p-4 sm:p-5 flex-1 flex flex-col justify-between space-y-4 animate-in zoom-in-95">
                 <div className="p-5 rounded-3xl bg-gradient-to-b from-red-950/80 via-[#11161F] to-[#11161F] border-2 border-red-500/60 shadow-2xl space-y-4 relative overflow-hidden">
                   <div className="absolute -top-10 -right-10 w-32 h-32 bg-red-600/20 rounded-full blur-2xl pointer-events-none" />
@@ -477,7 +503,7 @@ export default function ResponderPage() {
             )}
 
             {/* ACCEPTED / EN ROUTE */}
-            {(responderState === 'accepted' || responderState === 'en_route') && (
+            {(responderState === 'accepted' || responderState === 'en_route') && apiAssignment && (
               <div className="flex-1 flex flex-col">
                 {responderState === 'en_route' && (
                   <div onClick={() => setNavStepIndex((prev) => (prev + 1) % turnDirections.length)} className="bg-[#11161F] border-b border-emerald-500/40 p-3 sm:p-3.5 flex items-center justify-between gap-3 text-xs cursor-pointer select-none" title="Tap to simulate next turn">
@@ -492,6 +518,113 @@ export default function ResponderPage() {
                   </div>
                 )}
 
+                <div className="relative flex-1 min-h-[280px] sm:min-h-[320px]">
+                  {useGoogleMap && apiAssignment.caseLatitude && apiAssignment.caseLongitude ? (
+                    <GoogleMap
+                      center={responderLocation || { latitude: apiAssignment.caseLatitude, longitude: apiAssignment.caseLongitude }}
+                      markers={[{
+                        id: apiAssignment.caseCode,
+                        type: 'EMERGENCY' as const,
+                        position: { latitude: apiAssignment.caseLatitude, longitude: apiAssignment.caseLongitude },
+                        title: apiAssignment.caseCode,
+                        subtitle: apiAssignment.locationText || 'Emergency',
+                        urgency: apiAssignment.urgency as 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | undefined,
+                      }]}
+                      heightClass="h-full min-h-[280px] sm:min-h-[320px]"
+                      className="rounded-xl"
+                    />
+                  ) : (
+                    <InteractiveMap singleCaseMode={currentCase} heightClass="h-full min-h-[280px] sm:min-h-[320px]" lang={lang} showLayersControl={false} />
+                  )}
+                  <div className="absolute top-3 left-3 right-3 flex items-center justify-between pointer-events-none z-10">
+                    <div className="px-3 py-1.5 rounded-xl bg-[#0B0E14]/95 backdrop-blur-md border border-emerald-500/50 text-xs font-mono font-bold text-emerald-300 shadow-xl flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                      {apiAssignment.caseLatitude && apiAssignment.caseLongitude && responderLocation ? (
+                        <span>LIVE TRACKING</span>
+                      ) : (
+                        <span>{apiAssignment.urgency} • {apiAssignment.categories.join(', ')}</span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="absolute bottom-3 right-3 z-10 flex flex-col gap-2">
+                    <button onClick={() => setNotificationToast(isUrdu ? 'نقشہ سینٹر ہو گیا' : 'Map recentered')} className="w-10 h-10 rounded-xl bg-[#11161F]/95 backdrop-blur-md border border-[#30363D] hover:border-blue-400 text-gray-200 flex items-center justify-center shadow-xl active:scale-95 transition-all" title={t.recenterMap}>
+                      <Locate className="w-4 h-4 text-blue-400" />
+                    </button>
+                    {apiAssignment.requesterContact && (
+                      <a href={`tel:${apiAssignment.requesterContact}`} className="w-10 h-10 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white flex items-center justify-center shadow-xl active:scale-95 transition-all" title={t.callRequester}>
+                        <PhoneCall className="w-4 h-4" />
+                      </a>
+                    )}
+                  </div>
+                  <div className="absolute bottom-3 left-3 z-10">
+                    <div className={`px-2.5 py-1 rounded-xl bg-[#0B0E14]/95 backdrop-blur-md border text-[10px] font-mono font-semibold flex items-center gap-1.5 ${
+                      isTrackingActive
+                        ? 'border-emerald-500/40 text-emerald-400'
+                        : 'border-[#30363D] text-gray-400'
+                    }`}>
+                      <span className={`w-1.5 h-1.5 rounded-full ${
+                        isTrackingActive ? 'bg-emerald-400 animate-ping' : 'bg-gray-400'
+                      }`} />
+                      <span>{isTrackingActive
+                        ? (isUrdu ? 'لائیو لوکیشن شیئرنگ فعال' : 'Live Location Sharing ON')
+                        : (isUrdu ? 'لوکیشن شیئرنگ بند' : 'Location sharing off')
+                      }</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="p-4 bg-[#11161F] border-t border-[#30363D] space-y-3 shrink-0">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-mono text-xs font-black text-white">{apiAssignment.caseCode}</span>
+                        <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-red-500/20 text-red-300 border border-red-500/40">{apiAssignment.urgency} • {apiAssignment.categories.join(', ')}</span>
+                      </div>
+                      <p className="text-sm font-black text-white truncate mt-0.5">{apiAssignment.locationText || 'Emergency Location'}</p>
+                      {apiAssignment.summary && <p className="text-xs text-gray-300 truncate">&quot;{apiAssignment.summary}&quot;</p>}
+                    </div>
+                    <Link href={`/responder/cases/${apiAssignment.caseCode}`} className="px-3 py-1.5 rounded-xl bg-[#161B22] hover:bg-[#21262D] border border-[#30363D] text-blue-400 font-bold text-xs whitespace-nowrap shrink-0 flex items-center gap-1">
+                      <span>{t.caseDetails}</span><ChevronRight className="w-3.5 h-3.5" />
+                    </Link>
+                  </div>
+                  {responderState === 'accepted' ? (
+                    <button onClick={handleStartNavigation} className="w-full py-4 px-6 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-base shadow-2xl shadow-emerald-900/50 ring-2 ring-emerald-500/50 active:scale-95 transition-all flex items-center justify-center gap-2 min-h-[52px]">
+                      <NavIcon className="w-5 h-5" /><span>{t.startNavigation}</span>
+                    </button>
+                  ) : (
+                    <button onClick={handleMarkArrived} className="w-full py-4 px-6 rounded-2xl bg-blue-600 hover:bg-blue-500 text-white font-black text-base shadow-2xl shadow-blue-900/50 ring-2 ring-blue-500/50 active:scale-95 transition-all flex items-center justify-center gap-2 min-h-[52px]">
+                      <MapPin className="w-5 h-5" /><span>{t.markArrived}</span>
+                    </button>
+                  )}
+                  <div className="grid grid-cols-2 gap-2">
+                    {apiAssignment.requesterContact && (
+                      <a href={`tel:${apiAssignment.requesterContact}`} className="py-2.5 px-3 rounded-xl bg-[#0B0E14] hover:bg-[#161B22] border border-[#30363D] text-xs font-bold text-gray-200 flex items-center justify-center gap-1.5 min-h-[44px]">
+                        <PhoneCall className="w-3.5 h-3.5 text-emerald-400" /><span>{t.callRequester}</span>
+                      </a>
+                    )}
+                    <a href="tel:1122" className="py-2.5 px-3 rounded-xl bg-[#0B0E14] hover:bg-[#161B22] border border-[#30363D] text-xs font-bold text-gray-200 flex items-center justify-center gap-1.5 min-h-[44px]">
+                      <Phone className="w-3.5 h-3.5 text-blue-400" /><span>{t.callOperator}</span>
+                    </a>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ACCEPTED / EN ROUTE - fallback when no real assignment */}
+            {(responderState === 'accepted' || responderState === 'en_route') && !apiAssignment && (
+              <div className="flex-1 flex flex-col">
+                {responderState === 'en_route' && (
+                  <div onClick={() => setNavStepIndex((prev) => (prev + 1) % turnDirections.length)} className="bg-[#11161F] border-b border-emerald-500/40 p-3 sm:p-3.5 flex items-center justify-between gap-3 text-xs cursor-pointer select-none" title="Tap to simulate next turn">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div className="w-8 h-8 rounded-xl bg-emerald-600 flex items-center justify-center text-white font-bold shrink-0"><NavIcon className="w-4 h-4" /></div>
+                      <div className="min-w-0">
+                        <span className="text-[10px] font-mono text-emerald-400 font-bold block uppercase tracking-wider">LIVE TURN GUIDANCE</span>
+                        <p className="font-bold text-white text-xs truncate">{turnDirections[navStepIndex]}</p>
+                      </div>
+                    </div>
+                    <div className="text-right shrink-0 font-mono text-[10px] text-gray-400"><span>NEXT TURN</span></div>
+                  </div>
+                )}
                 <div className="relative flex-1 min-h-[280px] sm:min-h-[320px]">
                   {useGoogleMap && currentCase.location.coordinates ? (
                     <GoogleMap
@@ -540,7 +673,6 @@ export default function ResponderPage() {
                     </div>
                   </div>
                 </div>
-
                 <div className="p-4 bg-[#11161F] border-t border-[#30363D] space-y-3 shrink-0">
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
@@ -577,7 +709,46 @@ export default function ResponderPage() {
             )}
 
             {/* ARRIVED STATE */}
-            {responderState === 'arrived' && (
+            {responderState === 'arrived' && apiAssignment && (
+              <div className="flex-1 p-4 sm:p-5 flex flex-col justify-between space-y-4 animate-in fade-in">
+                <div className="p-4 sm:p-5 rounded-3xl bg-[#11161F] border border-blue-500/50 space-y-3.5 shadow-xl">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5 text-blue-400 font-black text-xs font-mono uppercase">
+                      <span className="w-2.5 h-2.5 rounded-full bg-blue-500" /><span>{t.statusArrived}</span>
+                    </div>
+                    <Link href={`/responder/cases/${apiAssignment.caseCode}`} className="font-mono text-xs font-black text-blue-400 hover:underline">{apiAssignment.caseCode}</Link>
+                  </div>
+                  <div className="space-y-1">
+                    <h3 className="text-base font-black text-white">{apiAssignment.locationText || 'Emergency Location'}</h3>
+                  </div>
+                  {apiAssignment.summary && <p className="text-xs text-gray-300">&quot;{apiAssignment.summary}&quot;</p>}
+                  <Link href={`/responder/cases/${apiAssignment.caseCode}`} className="w-full py-2 px-3 rounded-xl bg-[#161B22] hover:bg-[#21262D] border border-[#30363D] text-xs font-bold text-blue-300 flex items-center justify-center gap-1">
+                    <FileText className="w-3.5 h-3.5" /><span>{t.caseDetails}</span>
+                  </Link>
+                </div>
+                <div className="grid grid-cols-2 gap-2.5">
+                  {apiAssignment.requesterContact && (
+                    <a href={`tel:${apiAssignment.requesterContact}`} className="py-3 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center justify-center gap-1.5 shadow min-h-[44px]">
+                      <PhoneCall className="w-4 h-4" /><span>{t.callRequester}</span>
+                    </a>
+                  )}
+                  <a href="tel:1122" className="py-3 px-3 rounded-xl bg-[#11161F] hover:bg-[#161B22] border border-[#30363D] text-white text-xs font-bold flex items-center justify-center gap-1.5 min-h-[44px]">
+                    <Phone className="w-4 h-4 text-blue-400" /><span>{t.callOperator}</span>
+                  </a>
+                </div>
+                <div className="space-y-2.5 pt-2">
+                  <button onClick={handleCompleteResponse} className="w-full py-4 px-6 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-base shadow-2xl shadow-emerald-900/50 ring-2 ring-emerald-500/50 active:scale-95 transition-all flex items-center justify-center gap-2 min-h-[54px]">
+                    <CheckCircle2 className="w-5 h-5" /><span>{t.completeResponse}</span>
+                  </button>
+                  <button onClick={() => setShowSupportModal(true)} className="w-full py-3 px-4 rounded-2xl bg-amber-600/20 hover:bg-amber-600/30 border border-amber-500/40 text-amber-300 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors min-h-[44px]">
+                    <Radio className="w-4 h-4" /><span>{t.requestAdditionalSupport}</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* ARRIVED STATE - fallback when no real assignment */}
+            {responderState === 'arrived' && !apiAssignment && (
               <div className="flex-1 p-4 sm:p-5 flex flex-col justify-between space-y-4 animate-in fade-in">
                 <div className="p-4 sm:p-5 rounded-3xl bg-[#11161F] border border-blue-500/50 space-y-3.5 shadow-xl">
                   <div className="flex items-center justify-between">
