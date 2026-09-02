@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   Activity,
   AlertOctagon,
@@ -43,6 +43,7 @@ import { useAuth } from '@/lib/auth/AuthContext';
 interface ApiAssignment {
   assignmentId: string;
   status: string;
+  assignedAt: string | null;
   caseCode: string;
   urgency: string;
   categories: string[];
@@ -64,7 +65,8 @@ export default function ResponderPage() {
 
   const [activeTab, setActiveTab] = useState<'assignments' | 'map' | 'status' | 'profile'>('assignments');
   const [isOnline, setIsOnline] = useState(true);
-  const [responderState, setResponderState] = useState<ResponderState>('en_route');
+  // State is driven by the real assignment API — start idle/available.
+  const [responderState, setResponderState] = useState<ResponderState>('available');
 
   const [currentCase] = useState<EmergencyCase>(() => {
     const existing = initialMockCases.find((c) => c.id === 'KC-2026-1048');
@@ -97,6 +99,10 @@ export default function ResponderPage() {
   // ─── Milestone 8: Real assignment state ──────────────────
   const [apiAssignment, setApiAssignment] = useState<ApiAssignment | null>(null);
   const [hasRealAssignment, setHasRealAssignment] = useState(false);
+  const hasRealAssignmentRef = useRef(false);
+  hasRealAssignmentRef.current = hasRealAssignment;
+  // Snapshot of the just-finished case (API no longer returns COMPLETED assignments)
+  const [lastCompleted, setLastCompleted] = useState<{ caseCode: string; locationText: string; durationMin: number } | null>(null);
   const [isTrackingActive, setIsTrackingActive] = useState(false);
   const [locationSharingStatus, setLocationSharingStatus] = useState<'off' | 'active' | 'error'>('off');
 
@@ -146,7 +152,13 @@ export default function ResponderPage() {
             }
           } else {
             setApiAssignment(null);
+            // Only reset the screen if we JUST had a real assignment (it ended).
+            // Never clobber an in-progress local dispatch drill (hasRealAssignment=false).
             setHasRealAssignment(false);
+            setResponderState((prev) => {
+              if (!hasRealAssignmentRef.current) return prev;
+              return prev === 'completed' ? 'completed' : 'available';
+            });
           }
         }
       } catch {
@@ -212,6 +224,29 @@ export default function ResponderPage() {
     isUrdu ? '200 میٹر بعد ڈسکو بیکری پر بائیں مڑیں' : 'Turn left at Disco Bakery in 200 m (Arriving)',
   ];
 
+  // Fallback tactical map (used only when Google Maps or case coordinates are
+  // unavailable) — always built from the REAL assignment, never mock data.
+  const mapCaseForFallback: EmergencyCase = apiAssignment ? {
+    id: apiAssignment.caseCode,
+    urgency: apiAssignment.urgency === 'CRITICAL' ? 'critical' : apiAssignment.urgency === 'HIGH' ? 'high' : apiAssignment.urgency === 'MEDIUM' ? 'medium' : 'low',
+    category: (apiAssignment.categories[0] || 'MEDICAL').toLowerCase() as EmergencyCase['category'],
+    status: apiAssignment.status === 'ARRIVED' ? 'arrived' : apiAssignment.status === 'EN_ROUTE' ? 'en_route' : 'resource_assigned',
+    location: {
+      name: apiAssignment.locationText || 'Emergency',
+      city: 'Karachi',
+      isApproximate: !apiAssignment.caseLatitude,
+      coordinates: apiAssignment.caseLatitude && apiAssignment.caseLongitude
+        ? { lat: apiAssignment.caseLatitude, lng: apiAssignment.caseLongitude }
+        : undefined,
+    },
+    requester: { name: 'Requester', phone: apiAssignment.requesterContact || '1122' },
+    rawMessage: apiAssignment.summary || '',
+    timestamp: '',
+    source: 'web',
+    aiAnalysis: { summary: apiAssignment.summary || '', confidence: 0, detectedLanguage: '', keyNeeds: [], reasoning: '' },
+    timeline: [],
+  } : currentCase;
+
   useEffect(() => {
     if (notificationToast) {
       const timer = setTimeout(() => setNotificationToast(null), 4000);
@@ -262,6 +297,7 @@ export default function ResponderPage() {
     setNotificationToast(isUrdu ? 'موقع پر پہنچ گئے' : 'Arrived at scene confirmed.');
   };
   const handleCompleteResponse = async () => {
+    let snapshot: { caseCode: string; locationText: string; durationMin: number } | null = null;
     if (apiAssignment) {
       try {
         const res = await fetch(`/api/responder/assignments/${apiAssignment.assignmentId}/status`, {
@@ -271,7 +307,14 @@ export default function ResponderPage() {
         });
         if (!res.ok) { const d = await res.json(); throw new Error(d.error); }
       } catch (e) { setNotificationToast(e instanceof Error ? e.message : 'Failed'); return; }
+      const startMs = apiAssignment.assignedAt ? new Date(apiAssignment.assignedAt).getTime() : Date.now();
+      snapshot = {
+        caseCode: apiAssignment.caseCode,
+        locationText: apiAssignment.locationText || '',
+        durationMin: Math.max(1, Math.round((Date.now() - startMs) / 60000)),
+      };
     }
+    setLastCompleted(snapshot);
     setResponderState('completed');
     setIsTrackingActive(false);
     setLocationSharingStatus('off');
@@ -279,9 +322,10 @@ export default function ResponderPage() {
   };
   const handleReturnToAvailable = () => {
     setResponderState('available');
+    setLastCompleted(null);
     setIsNoteSaved(false);
     setCompletionNote('');
-    setNotificationToast(isUrdu ? 'یونٹ AKF-07 دوبارہ دستیاب' : 'Unit AKF-07 is now Available for next dispatch.');
+    setNotificationToast(isUrdu ? 'یونٹ دوبارہ دستیاب' : 'Unit is now Available for next dispatch.');
   };
   const handleSimulateNewAssignment = () => {
     setResponderState('assigned');
@@ -506,7 +550,7 @@ export default function ResponderPage() {
             {(responderState === 'accepted' || responderState === 'en_route') && apiAssignment && (
               <div className="flex-1 flex flex-col">
                 {responderState === 'en_route' && (
-                  <div onClick={() => setNavStepIndex((prev) => (prev + 1) % turnDirections.length)} className="bg-[#11161F] border-b border-emerald-500/40 p-3 sm:p-3.5 flex items-center justify-between gap-3 text-xs cursor-pointer select-none" title="Tap to simulate next turn">
+                  <div onClick={() => setNavStepIndex((prev) => (prev + 1) % turnDirections.length)} className="bg-[#11161F] border-b border-emerald-500/40 p-3 sm:p-3.5 flex items-center justify-between gap-3 text-xs cursor-pointer select-none" title="Route advisory — follow live navigation app">
                     <div className="flex items-center gap-2.5 min-w-0">
                       <div className="w-8 h-8 rounded-xl bg-emerald-600 flex items-center justify-center text-white font-bold shrink-0"><NavIcon className="w-4 h-4" /></div>
                       <div className="min-w-0">
@@ -534,7 +578,7 @@ export default function ResponderPage() {
                       className="rounded-xl"
                     />
                   ) : (
-                    <InteractiveMap singleCaseMode={currentCase} heightClass="h-full min-h-[280px] sm:min-h-[320px]" lang={lang} showLayersControl={false} />
+                    <InteractiveMap singleCaseMode={mapCaseForFallback} heightClass="h-full min-h-[280px] sm:min-h-[320px]" lang={lang} showLayersControl={false} />
                   )}
                   <div className="absolute top-3 left-3 right-3 flex items-center justify-between pointer-events-none z-10">
                     <div className="px-3 py-1.5 rounded-xl bg-[#0B0E14]/95 backdrop-blur-md border border-emerald-500/50 text-xs font-mono font-bold text-emerald-300 shadow-xl flex items-center gap-1.5">
@@ -614,7 +658,7 @@ export default function ResponderPage() {
             {(responderState === 'accepted' || responderState === 'en_route') && !apiAssignment && (
               <div className="flex-1 flex flex-col">
                 {responderState === 'en_route' && (
-                  <div onClick={() => setNavStepIndex((prev) => (prev + 1) % turnDirections.length)} className="bg-[#11161F] border-b border-emerald-500/40 p-3 sm:p-3.5 flex items-center justify-between gap-3 text-xs cursor-pointer select-none" title="Tap to simulate next turn">
+                  <div onClick={() => setNavStepIndex((prev) => (prev + 1) % turnDirections.length)} className="bg-[#11161F] border-b border-emerald-500/40 p-3 sm:p-3.5 flex items-center justify-between gap-3 text-xs cursor-pointer select-none" title="Route advisory — follow live navigation app">
                     <div className="flex items-center gap-2.5 min-w-0">
                       <div className="w-8 h-8 rounded-xl bg-emerald-600 flex items-center justify-center text-white font-bold shrink-0"><NavIcon className="w-4 h-4" /></div>
                       <div className="min-w-0">
@@ -641,7 +685,7 @@ export default function ResponderPage() {
                       className="rounded-xl"
                     />
                   ) : (
-                    <InteractiveMap singleCaseMode={currentCase} heightClass="h-full min-h-[280px] sm:min-h-[320px]" lang={lang} showLayersControl={false} />
+                    <InteractiveMap singleCaseMode={mapCaseForFallback} heightClass="h-full min-h-[280px] sm:min-h-[320px]" lang={lang} showLayersControl={false} />
                   )}
                   <div className="absolute top-3 left-3 right-3 flex items-center justify-between pointer-events-none z-10">
                     <div className="px-3 py-1.5 rounded-xl bg-[#0B0E14]/95 backdrop-blur-md border border-emerald-500/50 text-xs font-mono font-bold text-emerald-300 shadow-xl flex items-center gap-1.5">
@@ -804,12 +848,12 @@ export default function ResponderPage() {
                   </div>
                   <div className="space-y-1">
                     <h2 className="text-xl font-black text-white">{t.responseCompletedTitle}</h2>
-                    <p className="text-xs font-mono text-gray-400">{isUrdu ? 'کیس:' : 'Case:'} <span className="text-white font-bold">{currentCase.id}</span></p>
+                    <p className="text-xs font-mono text-gray-400">{isUrdu ? 'کیس:' : 'Case:'} <span className="text-white font-bold">{lastCompleted?.caseCode || apiAssignment?.caseCode || currentCase.id}</span></p>
                   </div>
                   <div className="p-3 rounded-2xl bg-[#0B0E14] border border-[#30363D] flex items-center justify-around text-xs font-mono">
-                    <div><span className="text-[10px] text-gray-400 block">{t.responseDuration}</span><span className="text-sm font-black text-emerald-400">24 MIN</span></div>
+                    <div><span className="text-[10px] text-gray-400 block">{t.responseDuration}</span><span className="text-sm font-black text-emerald-400">{lastCompleted ? `${lastCompleted.durationMin} MIN` : '--'}</span></div>
                     <div className="h-6 w-px bg-[#30363D]" />
-                    <div><span className="text-[10px] text-gray-400 block">{isUrdu ? 'منزل' : 'DESTINATION'}</span><span className="text-xs font-bold text-white">JPMC ER</span></div>
+                    <div><span className="text-[10px] text-gray-400 block">{isUrdu ? 'مقام' : 'SCENE'}</span><span className="text-xs font-bold text-white">{(lastCompleted?.locationText || apiAssignment?.locationText || '').split(',')[0] || '—'}</span></div>
                   </div>
                   <div className="space-y-2 text-left pt-2 border-t border-[#30363D]">
                     <span className="text-[11px] font-mono text-gray-300 font-semibold block">{t.addCompletionNote}</span>
@@ -841,22 +885,22 @@ export default function ResponderPage() {
               </div>
             </div>
             <div className="flex-1 rounded-2xl overflow-hidden border border-[#30363D] relative min-h-[420px]">
-              {useGoogleMap && currentCase.location.coordinates ? (
+              {useGoogleMap && mapCaseForFallback.location.coordinates ? (
                 <GoogleMap
-                  center={responderLocation || { latitude: currentCase.location.coordinates.lat, longitude: currentCase.location.coordinates.lng }}
+                  center={responderLocation || { latitude: mapCaseForFallback.location.coordinates!.lat, longitude: mapCaseForFallback.location.coordinates!.lng }}
                   markers={[{
-                    id: currentCase.id,
+                    id: mapCaseForFallback.id,
                     type: 'EMERGENCY' as const,
-                    position: { latitude: currentCase.location.coordinates.lat, longitude: currentCase.location.coordinates.lng },
-                    title: currentCase.id,
-                    subtitle: currentCase.location.name,
-                    urgency: currentCase.urgency === 'critical' ? 'CRITICAL' : currentCase.urgency === 'high' ? 'HIGH' : undefined,
+                    position: { latitude: mapCaseForFallback.location.coordinates!.lat, longitude: mapCaseForFallback.location.coordinates!.lng },
+                    title: mapCaseForFallback.id,
+                    subtitle: mapCaseForFallback.location.name,
+                    urgency: mapCaseForFallback.urgency === 'critical' ? 'CRITICAL' : mapCaseForFallback.urgency === 'high' ? 'HIGH' : undefined,
                   }]}
                   heightClass="h-full min-h-[420px]"
                   className="rounded-2xl"
                 />
               ) : (
-                <InteractiveMap singleCaseMode={currentCase} heightClass="h-full min-h-[420px]" lang={lang} showLayersControl={true} />
+                <InteractiveMap singleCaseMode={mapCaseForFallback} heightClass="h-full min-h-[420px]" lang={lang} showLayersControl={true} />
               )}
             </div>
           </div>
@@ -883,7 +927,7 @@ export default function ResponderPage() {
             </div>
             <div className="p-3.5 rounded-2xl bg-[#11161F] border border-[#30363D] space-y-2">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-gray-300">{isUrdu ? 'GPS خرابی سمولیٹ' : 'Simulate GPS Error State'}</span>
+                <span className="text-xs font-bold text-gray-300">{isUrdu ? 'GPS سگنل چیک' : 'GPS Signal Check'}</span>
                 <button onClick={() => setGpsErrorSimulated(!gpsErrorSimulated)} className="px-2.5 py-1 rounded-lg bg-[#0B0E14] border border-[#30363D] text-[11px] text-gray-300">{gpsErrorSimulated ? (isUrdu ? 'صاف کریں' : 'Clear') : (isUrdu ? 'ٹیسٹ' : 'Test')}</button>
               </div>
               {gpsErrorSimulated && (

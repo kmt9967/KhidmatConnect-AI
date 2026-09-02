@@ -48,3 +48,6 @@ scripts/tts-samples/
 
 # Cloudflare tunnel binary
 cloudflared.exe
+
+# Session verification screenshots (root-level artifacts, never commit)
+/*.png
