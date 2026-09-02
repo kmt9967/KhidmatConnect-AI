@@ -196,6 +196,8 @@ model EmergencyCase {
   createdAt            DateTime        @default(now())
   updatedAt            DateTime        @updatedAt
   closedAt             DateTime?
+  /// Identifies internally seeded demo records; null for genuine cases.
+  demoKey              String?         @unique
 
   // Relations
   categories        EmergencyCaseCategory[]

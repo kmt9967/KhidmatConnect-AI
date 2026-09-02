@@ -14,19 +14,15 @@ import {
   LogOut,
   MapPin,
   Mic,
-  Plus,
   Radio,
   Search,
 } from 'lucide-react';
 import { useLanguage } from '@/i18n/LanguageContext';
 import { getTranslation } from '@/i18n/translations';
-import { initialMockCases, mockReliefResources } from '@/data/mockData';
-import type { EmergencyCase, UrgencyLevel, EmergencyCategory } from '@/types';
 import InteractiveMap from '@/components/InteractiveMap';
 import GoogleMap from '@/components/maps/GoogleMap';
 import { isGoogleMapsConfigured } from '@/lib/maps/googleMapsLoader';
 import type { MapMarkerData } from '@/lib/maps/types';
-import OperatorCaseDrawer from '@/components/operator/OperatorCaseDrawer';
 import AuthGuard from '@/components/AuthGuard';
 import { useAuth } from '@/lib/auth/AuthContext';
 import Link from 'next/link';
@@ -64,21 +60,12 @@ interface ApiActiveCase {
   }[];
 }
 
-interface ApiAssignmentResult {
-  assignmentId: string;
-  caseCode: string;
-  responderName: string;
-  ambulanceName?: string;
-}
-
 export default function OperatorPage() {
   const { lang, isUrdu, toggleLang } = useLanguage();
   const t = getTranslation(lang);
   const { user, logout } = useAuth();
 
-  const [cases, setCases] = useState<EmergencyCase[]>(initialMockCases);
-  const [selectedCaseId, setSelectedCaseId] = useState<string | null>('KC-2026-1048');
-  const [isDrawerOpen, setIsDrawerOpen] = useState(true);
+  const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
   const [activeQueueTab, setActiveQueueTab] = useState<'all_queue' | 'unconfirmed'>('all_queue');
   const [activeFilter, setActiveFilter] = useState<'all' | 'critical' | 'unassigned' | 'medical' | 'rescue'>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -89,9 +76,10 @@ export default function OperatorPage() {
   // ─── Milestone 8: Real API state ──────────────────────────
   const [apiActiveCases, setApiActiveCases] = useState<ApiActiveCase[]>([]);
   const [apiCasesLoaded, setApiCasesLoaded] = useState(false);
+  const [apiCounts, setApiCounts] = useState<{ availableResponders: number; availableAmbulances: number }>({ availableResponders: 0, availableAmbulances: 0 });
 
-  // ── Real API queue (replaces mock queue for display) ───
-  // When API has loaded, queueCases = real DB records. Otherwise empty.
+  // ── Real API queue ──────────────────────────────────────
+  // queueCases = live DB records once the API has loaded.
   const queueCases = apiCasesLoaded ? apiActiveCases : [];
 
   // ─── Milestone 9: Voice call state ────────────────────────
@@ -126,12 +114,13 @@ export default function OperatorPage() {
         if (res.ok) {
           const data = await res.json();
           setApiActiveCases(data.cases || []);
+          if (data.counts) setApiCounts(data.counts);
           setApiCasesLoaded(true);
         } else {
           setApiCasesLoaded(true);
         }
       } catch {
-        // API unavailable — fall back to mock data
+        // API unavailable — show empty queue rather than stale data
         setApiCasesLoaded(true);
       }
     }
@@ -160,13 +149,13 @@ export default function OperatorPage() {
     return () => clearInterval(interval);
   }, []);
 
-  const selectedCase = cases.find((c) => c.id === selectedCaseId) || null;
   const selectedApiCase = apiActiveCases.find((c) => c.caseCode === selectedCaseId) || null;
 
   // ─── Counts derived from real API data ────────────────────
   const criticalCount = queueCases.filter((c) => c.urgency === 'CRITICAL').length;
   const unassignedCount = queueCases.filter((c) => c.assignments.length === 0).length;
-  const availableRespondersCount = mockReliefResources.filter((r) => r.availability === 'available').length;
+  const availableRespondersCount = apiCounts.availableResponders;
+  const availableAmbulancesCount = apiCounts.availableAmbulances;
   const activeVoiceCalls = voiceCalls.filter((v) => v.status === 'ACTIVE' || v.status === 'PROCESSING').length;
   const voiceReviewCount = voiceCalls.filter((v) => v.humanReviewRequired).length;
   const unconfirmedCases = queueCases.filter((c) => !c.locationConfirmed || (c.latitude == null && c.longitude == null));
@@ -194,112 +183,9 @@ export default function OperatorPage() {
     return 0;
   });
 
+  // Clicking a queue card selects it on the map; the Details link opens the real case page.
   const handleSelectCase = useCallback((caseId: string) => {
     setSelectedCaseId(caseId);
-    setIsDrawerOpen(true);
-  }, []);
-
-  const handleApproveDispatch = useCallback(async (caseId: string, resourceId: string) => {
-    // ─── Milestone 8: Try real assignment API first ──────
-    // caseId is the mock case ID (e.g. 'KC-2026-1048').
-    // The real API uses caseCode. Try to find a matching real case.
-    const realCase = apiActiveCases.find((c) => c.caseCode === caseId);
-    if (realCase) {
-      try {
-        // Find available responder from API data
-        const availableResponder = await fetch(`/api/operator/cases/${caseId}/assign`)
-          .then((r) => r.ok ? r.json() : null)
-          .catch(() => null);
-        if (availableResponder?.responders?.length > 0) {
-          const res = await fetch(`/api/operator/cases/${caseId}/assign`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              responderId: availableResponder.responders[0].id,
-              ambulanceId: availableResponder.ambulances?.[0]?.id,
-            }),
-          });
-          if (res.ok) {
-            const result: ApiAssignmentResult = await res.json();
-            // Assignment succeeded via real API
-          }
-        }
-      } catch {
-        // Fall through to mock dispatch
-      }
-    }
-
-    // Mock dispatch (preserves existing demo behavior)
-    setCases((prev) =>
-      prev.map((c) => {
-        if (c.id !== caseId) return c;
-        const resource = mockReliefResources.find((r) => r.id === resourceId);
-        if (!resource) return c;
-        return {
-          ...c,
-          status: 'resource_assigned' as const,
-          assignedResource: {
-            id: resource.id,
-            name: resource.name,
-            type: resource.type,
-            responderName: resource.capacity?.split('•')[1]?.trim() || 'EMT Team',
-            responderPhone: resource.phone,
-            etaMinutes: 8,
-            distanceKm: 3.2,
-            currentCoords: resource.coordinates,
-          },
-        };
-      })
-    );
-  }, [apiActiveCases]);
-
-  const handleChangeUrgency = useCallback((caseId: string, newUrgency: UrgencyLevel) => {
-    setCases((prev) => prev.map((c) => (c.id === caseId ? { ...c, urgency: newUrgency } : c)));
-  }, []);
-
-  const handleChangeCategory = useCallback((caseId: string, newCategory: EmergencyCategory) => {
-    setCases((prev) => prev.map((c) => (c.id === caseId ? { ...c, category: newCategory } : c)));
-  }, []);
-
-  const handleAddOperatorNote = useCallback((caseId: string, note: string) => {
-    setCases((prev) =>
-      prev.map((c) => (c.id === caseId ? { ...c, operatorNotes: [...(c.operatorNotes || []), note] } : c))
-    );
-  }, []);
-
-  const handleSimulateNewEmergency = useCallback(() => {
-    const newCase: EmergencyCase = {
-      id: 'KC-2026-1053',
-      urgency: 'critical',
-      category: 'rescue',
-      status: 'operator_reviewing',
-      location: { name: 'Near SA Garden, Malir, Karachi', isApproximate: true, city: 'Karachi' },
-      requester: { name: 'Unknown Caller', phone: '03XX-XXXXXXX' },
-      rawMessage: 'Building collapse reported, multiple people trapped.',
-      timestamp: 'Just now',
-      source: 'voice_call',
-      aiAnalysis: {
-        summary: 'Structural collapse with multiple casualties trapped. Heavy rescue team needed immediately.',
-        summaryUr: 'عمارت گر گئی، متعدد افراد پھنسے ہوئے۔ بھاری ریسکیو ٹیم فوری درکار۔',
-        reasoning: 'Building collapse with trapped occupants requires immediate heavy rescue dispatch.',
-        keyNeeds: ['Heavy Rescue Equipment', 'Search Dogs', 'Trauma Ambulances'],
-        peopleCount: 8,
-        detectedLanguage: 'Urdu',
-        confidence: 0.88,
-        missingInfo: ['Exact building location', 'Number of floors'],
-      },
-      timeline: [
-        { step: 'submitted', label: 'Voice Call Received', labelUr: 'فون کال موصول', time: '14:30', completed: true },
-        { step: 'ai_reviewed', label: 'AI Triage', labelUr: 'AI تجزیہ', time: '14:30', completed: true, current: true },
-        { step: 'operator_reviewing', label: 'Operator Reviewing', labelUr: 'آپریٹر جائزہ', time: '--:--', completed: false },
-        { step: 'resource_assigned', label: 'Resource Assigned', labelUr: 'وسائل تفویض', time: '--:--', completed: false },
-        { step: 'en_route', label: 'En Route', labelUr: 'راستے میں', time: '--:--', completed: false },
-        { step: 'arrived', label: 'Arrived', labelUr: 'پہنچ گئے', time: '--:--', completed: false },
-        { step: 'completed', label: 'Completed', labelUr: 'مکمل', time: '--:--', completed: false },
-      ],
-    };
-    setCases((prev) => [newCase, ...prev]);
-    setDismissToast(false);
   }, []);
 
   // ─── latestCriticalAlert from real data ───────────────────
@@ -352,10 +238,6 @@ export default function OperatorPage() {
               <Globe className="w-3.5 h-3.5 text-blue-400" />
               <span>{lang === 'en' ? 'اردو' : 'English'}</span>
             </button>
-            <button onClick={handleSimulateNewEmergency} className="hidden lg:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-600/20 hover:bg-blue-600/30 border border-blue-500/40 text-blue-300 font-bold text-xs transition-colors active:scale-95" title="Simulate Alert">
-              <Plus className="w-3.5 h-3.5" />
-              <span>{isUrdu ? 'سمولیٹ' : 'Simulate'}</span>
-            </button>
             <Link href="/" className="px-2.5 py-1.5 rounded-xl bg-[#0B0E14] hover:bg-red-950/40 border border-[#30363D] hover:border-red-500/40 text-gray-400 hover:text-red-300 text-xs font-semibold transition-colors flex items-center gap-1.5" title="Citizen View">
               <LogOut className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">{isUrdu ? 'شہری' : 'Citizen'}</span>
@@ -399,6 +281,7 @@ export default function OperatorPage() {
               <div className="flex items-baseline gap-1.5">
                 <span className="text-lg sm:text-xl font-black text-emerald-300 font-mono">{availableRespondersCount}</span>
                 <span className="text-[11px] text-emerald-400/80 font-medium">{isUrdu ? 'دستیاب' : 'Available'}</span>
+                <span className="text-[10px] text-emerald-400/60 font-mono">+{availableAmbulancesCount}amb</span>
               </div>
             </div>
             <div className="w-8 h-8 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
@@ -478,7 +361,7 @@ export default function OperatorPage() {
                 </div>
               </div>
               <div className="flex items-center gap-1.5 shrink-0">
-                <button onClick={() => { setSelectedCaseId(latestCriticalAlert.caseCode); setIsDrawerOpen(true); }} className="px-2.5 py-1 rounded-lg bg-red-600 hover:bg-red-500 text-white font-bold text-xs transition-colors">{isUrdu ? 'دیکھیں' : 'View'}</button>
+                <Link href={`/operator/cases/${latestCriticalAlert.caseCode}`} onClick={() => setSelectedCaseId(latestCriticalAlert.caseCode)} className="px-2.5 py-1 rounded-lg bg-red-600 hover:bg-red-500 text-white font-bold text-xs transition-colors">{isUrdu ? 'دیکھیں' : 'View'}</Link>
                 <button onClick={() => setDismissToast(true)} className="p-1 text-gray-400 hover:text-white">✕</button>
               </div>
             </div>
@@ -489,8 +372,6 @@ export default function OperatorPage() {
               <GoogleMap
                 center={selectedApiCase?.latitude != null && selectedApiCase?.longitude != null
                   ? { latitude: selectedApiCase.latitude, longitude: selectedApiCase.longitude }
-                  : selectedCase?.location.coordinates
-                  ? { latitude: selectedCase.location.coordinates.lat, longitude: selectedCase.location.coordinates.lng }
                   : null}
                 markers={(() => {
                   const markers: MapMarkerData[] = [];
@@ -507,18 +388,7 @@ export default function OperatorPage() {
                       });
                     }
                   });
-                  // Resource markers
-                  mockReliefResources.forEach((r) => {
-                    markers.push({
-                      id: r.id,
-                      type: r.type === 'ambulance' ? 'AMBULANCE' : 'RESOURCE',
-                      position: { latitude: r.coordinates.lat, longitude: r.coordinates.lng },
-                      title: r.name,
-                      subtitle: r.address,
-                      category: r.type,
-                      available: r.availability === 'available',
-                    });
-                  });
+                  // Resource markers come from real assignment telemetry below
                   // ─── Milestone 8: Real responder/ambulance markers from API ───
                   apiActiveCases.forEach((c) => {
                     c.assignments.forEach((a) => {
@@ -547,22 +417,16 @@ export default function OperatorPage() {
                   return markers;
                 })()}
                 onMarkerClick={(marker) => {
-                  // Try real API case first, then mock
                   const apiCase = apiActiveCases.find((c) => c.caseCode === marker.id);
-                  if (apiCase) { setSelectedCaseId(apiCase.caseCode); setIsDrawerOpen(true); return; }
-                  const c = cases.find((c) => c.id === marker.id);
-                  if (c) handleSelectCase(c.id);
+                  if (apiCase) { setSelectedCaseId(apiCase.caseCode); }
                 }}
                 heightClass="h-full min-h-[450px]"
                 className="rounded-2xl"
               />
             ) : (
               <InteractiveMap
-                cases={cases}
-                resources={mockReliefResources}
                 selectedCaseId={selectedCaseId}
                 onSelectCase={handleSelectCase}
-                onQuickAssign={handleApproveDispatch}
                 heightClass="h-full min-h-[450px]"
                 lang={lang}
               />
@@ -634,7 +498,7 @@ export default function OperatorPage() {
                   );
                   const primaryCategory = item.categories[0] || '';
                   return (
-                    <div key={item.caseCode} onClick={() => { setSelectedCaseId(item.caseCode); setIsDrawerOpen(true); }} className={`p-3 rounded-2xl border transition-all cursor-pointer relative space-y-2 ${isSelected ? 'bg-[#161B22] border-blue-500 shadow-xl ring-1 ring-blue-500/50' : isCrit ? 'bg-[#11161F] border-red-500/40 hover:border-red-500/80' : 'bg-[#11161F] border-[#30363D] hover:border-gray-500'}`}>
+                    <div key={item.caseCode} onClick={() => { setSelectedCaseId(item.caseCode); }} className={`p-3 rounded-2xl border transition-all cursor-pointer relative space-y-2 ${isSelected ? 'bg-[#161B22] border-blue-500 shadow-xl ring-1 ring-blue-500/50' : isCrit ? 'bg-[#11161F] border-red-500/40 hover:border-red-500/80' : 'bg-[#11161F] border-[#30363D] hover:border-gray-500'}`}>
                       <div className="flex items-center justify-between gap-2">
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <span className="font-mono font-black text-white text-xs tracking-tight">{item.caseCode}</span>
@@ -683,7 +547,7 @@ export default function OperatorPage() {
                   const isSelected = selectedCaseId === item.caseCode;
                   const isCrit = item.urgency === 'CRITICAL';
                   return (
-                    <div key={item.caseCode} onClick={() => { setSelectedCaseId(item.caseCode); setIsDrawerOpen(true); }} className={`p-3.5 rounded-2xl border transition-all cursor-pointer space-y-2.5 ${isSelected ? 'bg-[#161B22] border-amber-400 ring-1 ring-amber-400/50 shadow-xl' : isCrit ? 'bg-[#11161F] border-red-500/50 hover:border-red-400' : 'bg-[#11161F] border-amber-500/40 hover:border-amber-400'}`}>
+                    <div key={item.caseCode} onClick={() => { setSelectedCaseId(item.caseCode); }} className={`p-3.5 rounded-2xl border transition-all cursor-pointer space-y-2.5 ${isSelected ? 'bg-[#161B22] border-amber-400 ring-1 ring-amber-400/50 shadow-xl' : isCrit ? 'bg-[#11161F] border-red-500/50 hover:border-red-400' : 'bg-[#11161F] border-amber-500/40 hover:border-amber-400'}`}>
                       <div className="flex items-center justify-between gap-2">
                         <div className="flex items-center gap-1.5">
                           <span className="font-mono font-black text-white text-xs">{item.caseCode}</span>
@@ -714,18 +578,6 @@ export default function OperatorPage() {
           </div>
         </div>
       </div>
-
-      {/* 4. DETAIL DRAWER */}
-      {isDrawerOpen && selectedCase && (
-        <OperatorCaseDrawer
-          selectedCase={selectedCase}
-          onClose={() => setIsDrawerOpen(false)}
-          onApproveDispatch={handleApproveDispatch}
-          onChangeUrgency={handleChangeUrgency}
-          onChangeCategory={handleChangeCategory}
-          onAddOperatorNote={handleAddOperatorNote}
-        />
-      )}
     </div>
     </AuthGuard>
   );

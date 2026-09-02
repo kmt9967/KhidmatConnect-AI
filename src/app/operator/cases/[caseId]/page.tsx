@@ -291,6 +291,7 @@ export default function OperatorCaseDetailPage() {
     ['PENDING', 'ACCEPTED', 'EN_ROUTE', 'ARRIVED'].includes(a.status)
   );
   const completedAssignment = caseData?.assignments?.find(a => a.status === 'COMPLETED');
+  const isClosedCase = ['COMPLETED', 'CLOSED', 'DUPLICATE'].includes(caseData?.status || '');
 
   // Map markers
   const mapMarkers: MapMarkerData[] = [];
@@ -431,7 +432,7 @@ export default function OperatorCaseDetailPage() {
                   </div>
                   <div className="flex items-center gap-4 text-[11px] text-[#6E7681]">
                     <span className="flex items-center gap-1"><Clock className="w-3 h-3" /> Created: {formatDate(caseData.createdAt)}</span>
-                    {caseData.detectedLanguage && <span>Language: {caseData.detectedLanguage}</span>}
+                    {caseData.detectedLanguage && <span>Language: {caseData.detectedLanguage.toUpperCase()}</span>}
                     {caseData.peopleAffected != null && <span className="flex items-center gap-1"><Users className="w-3 h-3" /> {caseData.peopleAffected} affected</span>}
                   </div>
                 </div>
@@ -596,8 +597,8 @@ export default function OperatorCaseDetailPage() {
                   </div>
                 )}
 
-                {/* New Assignment Form */}
-                {!activeAssignment && availableResources && (
+                {/* New Assignment Form — hidden once the case is finished */}
+                {!activeAssignment && !isClosedCase && availableResources && (
                   <div className="space-y-3">
                     <div>
                       <label className="text-[11px] font-bold text-[#6E7681] block mb-1">Responder</label>
@@ -636,7 +637,7 @@ export default function OperatorCaseDetailPage() {
                   </div>
                 )}
 
-                {!activeAssignment && !availableResources && (
+                {!activeAssignment && !isClosedCase && !availableResources && (
                   <p className="text-xs text-[#6E7681]">Loading available resources...</p>
                 )}
               </section>

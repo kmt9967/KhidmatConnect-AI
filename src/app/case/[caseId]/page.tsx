@@ -159,6 +159,24 @@ export default function CaseStatusPage() {
 
   // Fetch case data from API
   useEffect(() => {
+    // Allow the access token to arrive via ?t= query param (shareable tracking link).
+    // The emergency form always stores it in localStorage; this covers links opened
+    // on a different device/browser (e.g. demo runbook links).
+    try {
+      const queryToken = new URLSearchParams(window.location.search).get('t');
+      if (queryToken && queryToken.length >= 64) {
+        const key = `${CASE_STORAGE_PREFIX}${caseId}`;
+        if (!localStorage.getItem(key)) {
+          const ref: StoredCaseRef = {
+            caseCode: caseId,
+            accessToken: queryToken,
+            expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString(),
+          };
+          localStorage.setItem(key, JSON.stringify(ref));
+        }
+      }
+    } catch { /* URL/localStorage unavailable during SSR — ignore */ }
+
     function getStoredToken(): StoredCaseRef | null {
       try {
         const key = `${CASE_STORAGE_PREFIX}${caseId}`;
@@ -415,7 +433,7 @@ export default function CaseStatusPage() {
                 <div className="flex items-start justify-between gap-4">
                   <div>
                     <h1 className="text-xl font-bold text-[#E6EDF3] sm:text-2xl">
-                      {t.caseConfirmedTitle}
+                      {statusLabels[caseData.status]?.[isUrdu ? 'ur' : 'en'] || t.caseConfirmedTitle}
                     </h1>
                     <div className="mt-2 flex items-center gap-2">
                       <span className="font-mono text-sm text-[#58A6FF] font-bold">{caseData.caseCode}</span>
@@ -492,7 +510,7 @@ export default function CaseStatusPage() {
                           </span>
                           {a.responder?.lastUpdateAt && (
                             <span className="text-[10px] text-[#6E7681] font-mono">
-                              {isUrdu ? 'آخری اپ ڈیٹ' : 'Last update'}: {new Date(a.responder.lastUpdateAt).toLocaleTimeString('en-PK', { hour: '2-digit', minute: '2-digit' })}
+                              {isUrdu ? 'آخری جی پی ایس' : 'Last GPS update'}: {new Date(a.responder.lastUpdateAt).toLocaleTimeString('en-PK', { hour: '2-digit', minute: '2-digit' })}
                             </span>
                           )}
                         </div>
@@ -714,7 +732,7 @@ export default function CaseStatusPage() {
                     className="rounded-xl"
                     interactive={false}
                   />
-                  {!caseData.locationConfirmed && (
+                  {!caseData.locationConfirmed && caseData.status !== 'COMPLETED' && caseData.status !== 'CLOSED' && (
                     <p className="mt-1.5 text-[10px] text-[#D29922] text-center">
                       {lang === 'ur' ? 'مقام کی تصدیق کوآرڈینیٹر کر رہا ہے' : 'Location is being confirmed by the coordinator'}
                     </p>
@@ -730,7 +748,9 @@ export default function CaseStatusPage() {
                 >
                   <MapPin className="mx-auto h-6 w-6 text-[#6E7681] mb-2" />
                   <p className="text-xs text-[#8B949E]">
-                    {lang === 'ur' ? 'مقام کی تصدیق کوآرڈینیٹر کر رہا ہے' : 'Location is being confirmed by the coordinator'}
+                    {caseData.status === 'COMPLETED' || caseData.status === 'CLOSED'
+                      ? (lang === 'ur' ? 'درج کردہ مقام' : 'Reported location')
+                      : (lang === 'ur' ? 'مقام کی تصدیق کوآرڈینیٹر کر رہا ہے' : 'Location is being confirmed by the coordinator')}
                   </p>
                   <p className="mt-1 text-sm text-[#E6EDF3]">{caseData.locationText}</p>
                 </motion.div>
