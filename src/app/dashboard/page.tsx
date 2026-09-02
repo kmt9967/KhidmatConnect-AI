@@ -13,6 +13,8 @@ import {
 } from '@/data/mockData';
 import type { CitizenRequest, CitizenRequestStatus } from '@/types';
 import MobileBottomNav from '@/components/MobileBottomNav';
+import AuthGuard from '@/components/AuthGuard';
+import { useAuth } from '@/lib/auth/AuthContext';
 import {
   AlertTriangle,
   Activity,
@@ -36,6 +38,7 @@ type DashboardTab = 'cases' | 'requests' | 'messages' | 'profile';
 export default function DashboardPage() {
   const { lang, isUrdu, toggleLang } = useLanguage();
   const t = getTranslation(lang);
+  const { user, logout } = useAuth();
 
   const [activeTab, setActiveTab] = useState<DashboardTab>('cases');
   const [inquirySubject, setInquirySubject] = useState('');
@@ -89,6 +92,7 @@ export default function DashboardPage() {
   const selectedMessage = mockInboxMessages.find((m) => m.id === selectedMessageId);
 
   return (
+    <AuthGuard requiredRole="CITIZEN">
     <div dir={isUrdu ? 'rtl' : 'ltr'} className="min-h-screen bg-[#0B0E14] pb-20 md:pb-0">
       {/* Top Header */}
       <div className="sticky top-0 z-40 border-b border-[#21262D] bg-[#0B0E14]/95 backdrop-blur-md">
@@ -100,6 +104,17 @@ export default function DashboardPage() {
             <span className="text-sm font-bold text-[#E6EDF3] hidden sm:block">{t.brand}</span>
           </div>
           <div className="flex items-center gap-2">
+            {user && (
+              <div className="hidden sm:flex items-center gap-2 rounded-lg border border-[#21262D] px-2.5 py-1.5">
+                <div className="h-5 w-5 rounded-full bg-[#58A6FF]/20 flex items-center justify-center text-[10px] font-bold text-[#58A6FF]">
+                  {(user.name || 'C').charAt(0)}
+                </div>
+                <span className="text-xs text-[#8B949E]">{user.name}</span>
+                <button onClick={logout} className="text-[#6E7681] hover:text-[#F85149] transition-colors" title="Logout">
+                  <LogOut className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            )}
             <Link
               href="/emergency"
               className="flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-[#F85149] to-[#DA3633] px-3 py-2 text-xs font-bold text-white shadow-lg shadow-red-500/20"
@@ -453,5 +468,6 @@ export default function DashboardPage() {
 
       <MobileBottomNav />
     </div>
+    </AuthGuard>
   );
 }
