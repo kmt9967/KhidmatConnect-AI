@@ -18,7 +18,7 @@ export const statusTransitionSchema = z.object({
 
 // ─── Location Update ────────────────────────────────────────
 export const locationUpdateSchema = z.object({
-  responderId: z.string().min(1, 'responderId is required'),
+  responderId: z.string().min(1).optional(), // overridden server-side from auth
   ambulanceId: z.string().min(1).optional(),
   assignmentId: z.string().min(1, 'assignmentId is required'),
   latitude: z.number().min(-90).max(90),
