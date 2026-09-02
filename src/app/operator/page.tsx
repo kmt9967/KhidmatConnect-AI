@@ -25,7 +25,6 @@ import type { EmergencyCase, UrgencyLevel, EmergencyCategory } from '@/types';
 import InteractiveMap from '@/components/InteractiveMap';
 import GoogleMap from '@/components/maps/GoogleMap';
 import { isGoogleMapsConfigured } from '@/lib/maps/googleMapsLoader';
-import { isLocationUnconfirmed } from '@/lib/maps/distance';
 import type { MapMarkerData } from '@/lib/maps/types';
 import OperatorCaseDrawer from '@/components/operator/OperatorCaseDrawer';
 import AuthGuard from '@/components/AuthGuard';
@@ -90,6 +89,10 @@ export default function OperatorPage() {
   // ─── Milestone 8: Real API state ──────────────────────────
   const [apiActiveCases, setApiActiveCases] = useState<ApiActiveCase[]>([]);
   const [apiCasesLoaded, setApiCasesLoaded] = useState(false);
+
+  // ── Real API queue (replaces mock queue for display) ───
+  // When API has loaded, queueCases = real DB records. Otherwise empty.
+  const queueCases = apiCasesLoaded ? apiActiveCases : [];
 
   // ─── Milestone 9: Voice call state ────────────────────────
   interface VoiceCallInfo {
@@ -158,42 +161,36 @@ export default function OperatorPage() {
   }, []);
 
   const selectedCase = cases.find((c) => c.id === selectedCaseId) || null;
+  const selectedApiCase = apiActiveCases.find((c) => c.caseCode === selectedCaseId) || null;
 
-  const criticalCount = cases.filter((c) => c.urgency === 'critical').length;
-  const unassignedCount = cases.filter((c) => !c.assignedResource).length;
+  // ─── Counts derived from real API data ────────────────────
+  const criticalCount = queueCases.filter((c) => c.urgency === 'CRITICAL').length;
+  const unassignedCount = queueCases.filter((c) => c.assignments.length === 0).length;
   const availableRespondersCount = mockReliefResources.filter((r) => r.availability === 'available').length;
   const activeVoiceCalls = voiceCalls.filter((v) => v.status === 'ACTIVE' || v.status === 'PROCESSING').length;
   const voiceReviewCount = voiceCalls.filter((v) => v.humanReviewRequired).length;
-  const unconfirmedCases = cases.filter((c) => {
-    // Use the real location-unconfirmed logic
-    if (isLocationUnconfirmed({
-      latitude: c.location.coordinates?.lat,
-      longitude: c.location.coordinates?.lng,
-      locationConfirmed: !c.location.isApproximate,
-    })) return true;
-    // Also include cases with approximate flag or no coordinates (backward compat)
-    return c.location.isApproximate || !c.location.coordinates;
-  });
+  const unconfirmedCases = queueCases.filter((c) => !c.locationConfirmed || (c.latitude == null && c.longitude == null));
   const unconfirmedCount = unconfirmedCases.length;
 
-  const standardQueueCases = cases.filter((c) => {
+  // ─── Filters on real API data ─────────────────────────────
+  const standardQueueCases = queueCases.filter((c) => {
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase().trim();
-      const matchId = c.id.toLowerCase().includes(q);
-      const matchLoc = c.location.name.toLowerCase().includes(q);
-      const matchCategory = c.category.toLowerCase().includes(q);
+      const matchId = c.caseCode.toLowerCase().includes(q);
+      const matchLoc = (c.locationText || '').toLowerCase().includes(q);
+      const matchCategory = c.categories.some((cat) => cat.toLowerCase().includes(q));
       if (!matchId && !matchLoc && !matchCategory) return false;
     }
-    if (activeFilter === 'critical') return c.urgency === 'critical';
-    if (activeFilter === 'unassigned') return !c.assignedResource;
-    if (activeFilter === 'medical') return c.category === 'medical';
-    if (activeFilter === 'rescue') return c.category === 'rescue';
+    if (activeFilter === 'critical') return c.urgency === 'CRITICAL';
+    if (activeFilter === 'unassigned') return c.assignments.length === 0;
+    if (activeFilter === 'medical') return c.categories.some((cat) => cat === 'MEDICAL');
+    if (activeFilter === 'rescue') return c.categories.some((cat) => cat === 'RESCUE');
     return true;
   });
 
   const sortedUnconfirmedCases = [...unconfirmedCases].sort((a, b) => {
-    if (a.urgency === 'critical' && b.urgency !== 'critical') return -1;
-    if (b.urgency === 'critical' && a.urgency !== 'critical') return 1;
+    if (a.urgency === 'CRITICAL' && b.urgency !== 'CRITICAL') return -1;
+    if (b.urgency === 'CRITICAL' && a.urgency !== 'CRITICAL') return 1;
     return 0;
   });
 
@@ -305,7 +302,8 @@ export default function OperatorPage() {
     setDismissToast(false);
   }, []);
 
-  const latestCriticalAlert = cases.find((c) => c.urgency === 'critical' && !c.assignedResource);
+  // ─── latestCriticalAlert from real data ───────────────────
+  const latestCriticalAlert = queueCases.find((c) => c.urgency === 'CRITICAL' && c.assignments.length === 0);
 
   return (
     <AuthGuard requiredRole="OPERATOR">
@@ -464,23 +462,23 @@ export default function OperatorPage() {
       <div className="flex-1 flex flex-col lg:flex-row overflow-hidden relative">
         {/* LEFT/CENTER: HERO LIVE MAP */}
         <div className={`flex-1 flex flex-col p-3 sm:p-4 relative overflow-hidden ${mobileView !== 'map' ? 'hidden lg:flex' : 'flex'}`}>
-          {/* Floating Critical Alert Toast */}
+          {/* Floating Critical Alert Toast — from real API data */}
           {latestCriticalAlert && !dismissToast && (
             <div className="absolute top-6 left-1/2 -translate-x-1/2 z-20 w-[92%] max-w-md p-3 rounded-2xl bg-[#161B22]/95 backdrop-blur-xl border border-red-500/60 shadow-2xl flex items-center justify-between gap-3 animate-in slide-in-from-top-4">
               <div className="flex items-center gap-2.5 min-w-0">
                 <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-ping shrink-0" />
                 <div className="min-w-0">
                   <div className="flex items-center gap-2 text-xs">
-                    <span className="font-mono font-black text-red-300">{latestCriticalAlert.id}</span>
+                    <span className="font-mono font-black text-red-300">{latestCriticalAlert.caseCode}</span>
                     <span className="text-gray-400">•</span>
-                    <span className="text-white font-bold capitalize truncate">{latestCriticalAlert.category}</span>
+                    <span className="text-white font-bold capitalize truncate">{latestCriticalAlert.categories[0] || 'EMERGENCY'}</span>
                     <span className="text-gray-400">•</span>
-                    <span className="text-gray-400 text-[11px] truncate">{latestCriticalAlert.location.name.split(',')[0]}</span>
+                    <span className="text-gray-400 text-[11px] truncate">{(latestCriticalAlert.locationText || '').split(',')[0]}</span>
                   </div>
                 </div>
               </div>
               <div className="flex items-center gap-1.5 shrink-0">
-                <button onClick={() => handleSelectCase(latestCriticalAlert.id)} className="px-2.5 py-1 rounded-lg bg-red-600 hover:bg-red-500 text-white font-bold text-xs transition-colors">{isUrdu ? 'دیکھیں' : 'View'}</button>
+                <button onClick={() => { setSelectedCaseId(latestCriticalAlert.caseCode); setIsDrawerOpen(true); }} className="px-2.5 py-1 rounded-lg bg-red-600 hover:bg-red-500 text-white font-bold text-xs transition-colors">{isUrdu ? 'دیکھیں' : 'View'}</button>
                 <button onClick={() => setDismissToast(true)} className="p-1 text-gray-400 hover:text-white">✕</button>
               </div>
             </div>
@@ -489,21 +487,23 @@ export default function OperatorPage() {
           <div className="flex-1 rounded-2xl overflow-hidden border border-[#30363D] relative shadow-inner">
             {useGoogleMap ? (
               <GoogleMap
-                center={selectedCase?.location.coordinates
+                center={selectedApiCase?.latitude != null && selectedApiCase?.longitude != null
+                  ? { latitude: selectedApiCase.latitude, longitude: selectedApiCase.longitude }
+                  : selectedCase?.location.coordinates
                   ? { latitude: selectedCase.location.coordinates.lat, longitude: selectedCase.location.coordinates.lng }
                   : null}
                 markers={(() => {
                   const markers: MapMarkerData[] = [];
-                  // Emergency markers
-                  cases.forEach((c) => {
-                    if (c.location.coordinates) {
+                  // Emergency markers from real API data
+                  apiActiveCases.forEach((c) => {
+                    if (c.latitude != null && c.longitude != null) {
                       markers.push({
-                        id: c.id,
+                        id: c.caseCode,
                         type: 'EMERGENCY',
-                        position: { latitude: c.location.coordinates.lat, longitude: c.location.coordinates.lng },
-                        title: `${c.id} • ${c.category.toUpperCase()}`,
-                        subtitle: c.location.name,
-                        urgency: c.urgency === 'critical' ? 'CRITICAL' : c.urgency === 'high' ? 'HIGH' : c.urgency === 'medium' ? 'MEDIUM' : 'LOW',
+                        position: { latitude: c.latitude, longitude: c.longitude },
+                        title: `${c.caseCode} • ${(c.categories[0] || 'EMERGENCY').toUpperCase()}`,
+                        subtitle: c.locationText || 'Emergency',
+                        urgency: c.urgency as 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | undefined,
                       });
                     }
                   });
@@ -547,6 +547,9 @@ export default function OperatorPage() {
                   return markers;
                 })()}
                 onMarkerClick={(marker) => {
+                  // Try real API case first, then mock
+                  const apiCase = apiActiveCases.find((c) => c.caseCode === marker.id);
+                  if (apiCase) { setSelectedCaseId(apiCase.caseCode); setIsDrawerOpen(true); return; }
                   const c = cases.find((c) => c.id === marker.id);
                   if (c) handleSelectCase(c.id);
                 }}
@@ -572,7 +575,7 @@ export default function OperatorPage() {
           <div className="p-3.5 border-b border-[#30363D] bg-[#0B0E14]/60 space-y-3 shrink-0">
             <div className="flex rounded-xl bg-[#161B22] p-1 border border-[#30363D]">
               <button onClick={() => setActiveQueueTab('all_queue')} className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${activeQueueTab === 'all_queue' ? 'bg-blue-600 text-white shadow' : 'text-gray-400 hover:text-gray-200'}`}>
-                <Activity className="w-3.5 h-3.5" /><span>{isUrdu ? 'لائیو قطار' : 'Live Queue'} ({cases.length})</span>
+                <Activity className="w-3.5 h-3.5" /><span>{isUrdu ? 'لائیو قطار' : 'Live Queue'} ({queueCases.length})</span>
               </button>
               <button onClick={() => setActiveQueueTab('unconfirmed')} className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${activeQueueTab === 'unconfirmed' ? 'bg-amber-600 text-white shadow' : 'text-amber-400 hover:text-amber-200'}`}>
                 <MapPin className="w-3.5 h-3.5" /><span>No GPS ({unconfirmedCount})</span>
@@ -607,46 +610,56 @@ export default function OperatorPage() {
             )}
           </div>
 
-          {/* QUEUE CARDS LIST */}
+          {/* QUEUE CARDS LIST — real API cases */}
           <div className="flex-1 overflow-y-auto p-3 space-y-2.5 scrollbar-thin">
             {activeQueueTab === 'all_queue' && (
               <>
+                {!apiCasesLoaded && (
+                  <div className="text-center py-10 text-gray-400 text-xs flex items-center justify-center gap-2">
+                    <Clock className="w-4 h-4 animate-spin" /> Loading live cases...
+                  </div>
+                )}
+                {apiCasesLoaded && standardQueueCases.length === 0 && queueCases.length === 0 && (
+                  <div className="text-center py-10 text-gray-400 text-xs">{isUrdu ? 'کوئی فعال ایمرجنسی کیس نہیں' : 'No active emergency cases'}</div>
+                )}
+                {apiCasesLoaded && standardQueueCases.length === 0 && queueCases.length > 0 && (
+                  <div className="text-center py-10 text-gray-400 text-xs">{isUrdu ? 'کوئی مماثل کیس نہیں ملا' : 'No matching incidents found in queue.'}</div>
+                )}
                 {standardQueueCases.map((item) => {
-                  const isSelected = selectedCaseId === item.id;
-                  const isCrit = item.urgency === 'critical';
-                  const isVoice = item.source === 'voice_call';
+                  const isSelected = selectedCaseId === item.caseCode;
+                  const isCrit = item.urgency === 'CRITICAL';
+                  const isHigh = item.urgency === 'HIGH';
+                  const activeAssignment = item.assignments.find((a) =>
+                    ['PENDING', 'ACCEPTED', 'EN_ROUTE', 'ARRIVED'].includes(a.status)
+                  );
+                  const primaryCategory = item.categories[0] || '';
                   return (
-                    <div key={item.id} onClick={() => handleSelectCase(item.id)} className={`p-3 rounded-2xl border transition-all cursor-pointer relative space-y-2 ${isSelected ? 'bg-[#161B22] border-blue-500 shadow-xl ring-1 ring-blue-500/50' : isCrit ? 'bg-[#11161F] border-red-500/40 hover:border-red-500/80' : 'bg-[#11161F] border-[#30363D] hover:border-gray-500'}`}>
+                    <div key={item.caseCode} onClick={() => { setSelectedCaseId(item.caseCode); setIsDrawerOpen(true); }} className={`p-3 rounded-2xl border transition-all cursor-pointer relative space-y-2 ${isSelected ? 'bg-[#161B22] border-blue-500 shadow-xl ring-1 ring-blue-500/50' : isCrit ? 'bg-[#11161F] border-red-500/40 hover:border-red-500/80' : 'bg-[#11161F] border-[#30363D] hover:border-gray-500'}`}>
                       <div className="flex items-center justify-between gap-2">
                         <div className="flex items-center gap-1.5 flex-wrap">
-                          <span className="font-mono font-black text-white text-xs tracking-tight">{item.id}</span>
-                          <span className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider ${isCrit ? 'bg-red-500/20 text-red-300 border border-red-500/40' : item.urgency === 'high' ? 'bg-amber-500/20 text-amber-300' : 'bg-blue-500/20 text-blue-300'}`}>
-                            {item.urgency} • {item.category}
+                          <span className="font-mono font-black text-white text-xs tracking-tight">{item.caseCode}</span>
+                          <span className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider ${isCrit ? 'bg-red-500/20 text-red-300 border border-red-500/40' : isHigh ? 'bg-amber-500/20 text-amber-300' : 'bg-blue-500/20 text-blue-300'}`}>
+                            {item.urgency}{primaryCategory ? ` • ${primaryCategory}` : ''}
                           </span>
-                          {isVoice && (
-                            <span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[9px] font-mono font-bold flex items-center gap-0.5">
-                              <Mic className="w-2.5 h-2.5" /><span>VOICE</span>
-                            </span>
-                          )}
                         </div>
-                        <span className="text-[10px] font-mono text-gray-400 shrink-0">{item.timestamp}</span>
+                        <span className="text-[10px] font-mono text-gray-400 shrink-0">{new Date(item.createdAt).toLocaleTimeString('en-PK', { hour: '2-digit', minute: '2-digit' })}</span>
                       </div>
                       <div className="text-xs font-semibold text-gray-200 flex items-center gap-1.5 truncate">
                         <MapPin className="w-3.5 h-3.5 text-gray-400 shrink-0" />
-                        <span className="truncate">{item.location.name}</span>
+                        <span className="truncate">{item.locationText || 'No location'}</span>
                       </div>
                       <div className="flex items-center justify-between text-[11px] pt-1 border-t border-[#30363D]/60 font-mono">
-                        {item.assignedResource ? (
+                        {activeAssignment ? (
                           <span className="text-emerald-400 font-bold flex items-center gap-1">
                             <Ambulance className="w-3 h-3" />
-                            <span>EN ROUTE: {item.assignedResource.name.split(' ').slice(0, 2).join(' ')}</span>
+                            <span>{activeAssignment.status === 'EN_ROUTE' ? 'EN ROUTE' : activeAssignment.status}: {activeAssignment.responder?.name?.split(' ').slice(0, 2).join(' ') || 'Assigned'}</span>
                           </span>
                         ) : (
                           <span className="text-amber-400 font-bold flex items-center gap-1">
                             <Clock className="w-3 h-3" /><span>{isUrdu ? 'بغیر تفویض' : 'UNASSIGNED'}</span>
                           </span>
                         )}
-                        <Link href={`/operator/cases/${item.id}`} onClick={(e) => e.stopPropagation()} className="text-blue-400 text-[10px] flex items-center gap-0.5 font-sans font-bold hover:text-blue-300 transition-colors">
+                        <Link href={`/operator/cases/${item.caseCode}`} onClick={(e) => e.stopPropagation()} className="text-blue-400 text-[10px] flex items-center gap-0.5 font-sans font-bold hover:text-blue-300 transition-colors">
                           <span>{isUrdu ? 'تفصیلات' : 'Details'}</span>
                           <ChevronRight className="w-3 h-3" />
                         </Link>
@@ -654,9 +667,6 @@ export default function OperatorPage() {
                     </div>
                   );
                 })}
-                {standardQueueCases.length === 0 && (
-                  <div className="text-center py-10 text-gray-400 text-xs">{isUrdu ? 'کوئی مماثل کیس نہیں ملا' : 'No matching incidents found in queue.'}</div>
-                )}
               </>
             )}
 
@@ -670,34 +680,33 @@ export default function OperatorPage() {
                   <p className="text-[11px] leading-relaxed">{t.unconfirmedNotice}</p>
                 </div>
                 {sortedUnconfirmedCases.map((item) => {
-                  const isSelected = selectedCaseId === item.id;
-                  const isCrit = item.urgency === 'critical';
+                  const isSelected = selectedCaseId === item.caseCode;
+                  const isCrit = item.urgency === 'CRITICAL';
                   return (
-                    <div key={item.id} onClick={() => handleSelectCase(item.id)} className={`p-3.5 rounded-2xl border transition-all cursor-pointer space-y-2.5 ${isSelected ? 'bg-[#161B22] border-amber-400 ring-1 ring-amber-400/50 shadow-xl' : isCrit ? 'bg-[#11161F] border-red-500/50 hover:border-red-400' : 'bg-[#11161F] border-amber-500/40 hover:border-amber-400'}`}>
+                    <div key={item.caseCode} onClick={() => { setSelectedCaseId(item.caseCode); setIsDrawerOpen(true); }} className={`p-3.5 rounded-2xl border transition-all cursor-pointer space-y-2.5 ${isSelected ? 'bg-[#161B22] border-amber-400 ring-1 ring-amber-400/50 shadow-xl' : isCrit ? 'bg-[#11161F] border-red-500/50 hover:border-red-400' : 'bg-[#11161F] border-amber-500/40 hover:border-amber-400'}`}>
                       <div className="flex items-center justify-between gap-2">
                         <div className="flex items-center gap-1.5">
-                          <span className="font-mono font-black text-white text-xs">{item.id}</span>
-                          <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-red-500/20 text-red-300 border border-red-500/30">{item.urgency} • {item.category}</span>
+                          <span className="font-mono font-black text-white text-xs">{item.caseCode}</span>
+                          <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-red-500/20 text-red-300 border border-red-500/30">{item.urgency}</span>
                         </div>
-                        <span className="text-[10px] font-mono text-gray-400">{item.timestamp}</span>
+                        <span className="text-[10px] font-mono text-gray-400">{new Date(item.createdAt).toLocaleTimeString('en-PK', { hour: '2-digit', minute: '2-digit' })}</span>
                       </div>
                       <div className="space-y-1">
-                        <div className="text-xs font-bold text-white">&quot;{item.location.name}&quot;</div>
+                        <div className="text-xs font-bold text-white">&quot;{item.locationText || 'Unknown location'}&quot;</div>
                         <div className="text-[11px] text-amber-400/90 font-mono flex items-center gap-1">
                           <AlertTriangle className="w-3 h-3 shrink-0" />
-                          <span>{isUrdu ? 'مقام دستیاب نہیں' : 'Exact location unavailable (Cell tower estimate)'}</span>
+                          <span>{isUrdu ? 'مقام دستیاب نہیں' : 'Exact location unavailable'}</span>
                         </div>
                       </div>
                       <div className="pt-1 flex items-center gap-2">
-                        <a href={`tel:${item.requester.phone}`} onClick={(e) => e.stopPropagation()} className="flex-1 py-1.5 px-3 rounded-xl bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold text-xs flex items-center justify-center gap-1.5 transition-colors shadow-sm">
-                          <MapPin className="w-3.5 h-3.5" /><span>{t.contactForLocation}</span>
-                        </a>
-                        <button onClick={() => handleSelectCase(item.id)} className="py-1.5 px-3 rounded-xl bg-[#0B0E14] hover:bg-[#161B22] border border-[#30363D] text-gray-300 text-xs font-semibold">{isUrdu ? 'ٹرائیج' : 'Triage'}</button>
+                        <Link href={`/operator/cases/${item.caseCode}`} onClick={(e) => e.stopPropagation()} className="flex-1 py-1.5 px-3 rounded-xl bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold text-xs flex items-center justify-center gap-1.5 transition-colors shadow-sm">
+                          <MapPin className="w-3.5 h-3.5" /><span>{isUrdu ? 'تفصیلات دیکھیں' : 'View Case'}</span>
+                        </Link>
                       </div>
                     </div>
                   );
                 })}
-                {sortedUnconfirmedCases.length === 0 && (
+                {sortedUnconfirmedCases.length === 0 && apiCasesLoaded && (
                   <div className="text-center py-10 text-gray-400 text-xs">{isUrdu ? 'تمام کیسز کی GPS تصدیق ہو چکی ہے' : 'All current active cases have verified GPS telemetry.'}</div>
                 )}
               </>
