@@ -18,8 +18,7 @@
  * and single language code. Multiple language codes only work in eu/global/us regions.
  */
 
-import * as fs from 'fs';
-import * as path from 'path';
+import { getAdcAccessToken } from './googleAdc';
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -72,35 +71,12 @@ async function getAccessToken(): Promise<string> {
     return cachedAccessToken;
   }
 
-  // Try to get ADC credentials
-  const adcPath = path.join(process.env.APPDATA || '', 'gcloud', 'application_default_credentials.json');
-  
-  if (!fs.existsSync(adcPath)) {
-    throw new Error('ADC credentials not found. Run: gcloud auth application-default login');
-  }
-
-  const creds = JSON.parse(fs.readFileSync(adcPath, 'utf8'));
-  
-  // For user credentials, refresh the token
-  if (creds.type === 'authorized_user') {
-    const response = await fetch('https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        client_id: creds.client_id,
-        client_secret: creds.client_secret,
-        refresh_token: creds.refresh_token,
-        grant_type: 'refresh_token',
-      }),
-    });
-    
-    const data = await response.json() as any;
-    cachedAccessToken = data.access_token as string;
-    tokenExpiry = Date.now() + (data.expires_in * 1000);
-    return cachedAccessToken!;
-  }
-  
-  throw new Error('Unsupported ADC credential type');
+  // Shared cross-platform ADC resolution (env override → gcloud well-known
+  // path; supports both authorized_user and service_account credentials).
+  const access = await getAdcAccessToken();
+  cachedAccessToken = access.token;
+  tokenExpiry = access.expiryMs;
+  return cachedAccessToken;
 }
 
 // ─── ASR Service ────────────────────────────────────────────

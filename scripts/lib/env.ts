@@ -1,18 +1,31 @@
 /**
  * Shared env loader for standalone scripts.
  *
- * Loads .env.local (dotenv-style: KEY="value" or KEY=value) into
+ * Loads an env file (dotenv-style: KEY="value" or KEY=value) into
  * process.env without overriding variables already present.
  *
  * Used by seed-demo-data / reset-demo scripts because the tsx runner
- * does not auto-load Next.js's .env.local.
+ * does not auto-load Next.js's env files.
+ *
+ * File resolution order (first existing wins):
+ *   1. $KC_ENV_FILE            — explicit override on servers
+ *   2. .env.local              — local development
+ *   3. .env.production         — deployed demo server (systemd already
+ *                                injecting env is also fine — values
+ *                                already present are never overwritten)
  */
-import { readFileSync, existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { readFileSync, existsSync } from 'fs';
+import { resolve } from 'path';
 
 export function loadEnvLocal(dir = process.cwd()) {
-  const envPath = resolve(dir, '.env.local');
-  if (!existsSync(envPath)) return;
+  const candidates = [
+    process.env.KC_ENV_FILE,
+    resolve(dir, '.env.local'),
+    resolve(dir, '.env.production'),
+  ].filter(Boolean) as string[];
+
+  const envPath = candidates.find((p) => existsSync(p));
+  if (!envPath) return;
 
   const content = readFileSync(envPath, 'utf8');
   for (const line of content.split('\n')) {

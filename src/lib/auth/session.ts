@@ -39,7 +39,15 @@ const COOKIE_NAME = 'kc_session';
 const SESSION_MAX_AGE = 60 * 60 * 24; // 24 hours in seconds
 
 function getSecret(): Uint8Array {
-  const secret = process.env.SESSION_SECRET || 'khidmatconnect-demo-secret-dev-only';
+  const secret = process.env.SESSION_SECRET;
+  if (!secret) {
+    // In production a real SESSION_SECRET is mandatory — never sign sessions
+    // with the dev fallback (fail fast at first request instead).
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('SESSION_SECRET must be set in production');
+    }
+    return new TextEncoder().encode('khidmatconnect-demo-secret-dev-only');
+  }
   return new TextEncoder().encode(secret);
 }
 

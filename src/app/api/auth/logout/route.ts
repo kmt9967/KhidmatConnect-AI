@@ -16,7 +16,10 @@ export async function POST() {
  *
  * Also supports GET for simple link-based logout.
  */
-export async function GET() {
+export async function GET(request: Request) {
   await clearSessionCookie();
-  return NextResponse.redirect(new URL('/login', process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'));
+  // Relative-safe redirect: prefer canonical APP_BASE_URL, else the current
+  // request origin (works behind nginx without any hardcoded localhost).
+  const base = process.env.APP_BASE_URL || new URL(request.url).origin;
+  return NextResponse.redirect(new URL('/login', base));
 }
