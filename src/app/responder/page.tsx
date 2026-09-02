@@ -12,6 +12,7 @@ import {
   FileText,
   Globe,
   Locate,
+  LogOut,
   MapPin,
   Navigation as NavIcon,
   Phone,
@@ -35,6 +36,8 @@ import { isGoogleMapsConfigured } from '@/lib/maps/googleMapsLoader';
 import type { GeoPoint, MapMarkerData } from '@/lib/maps/types';
 import ResponderCaseDetailsSheet from '@/components/responder/ResponderCaseDetailsSheet';
 import ResponderSupportModal from '@/components/responder/ResponderSupportModal';
+import AuthGuard from '@/components/AuthGuard';
+import { useAuth } from '@/lib/auth/AuthContext';
 
 // ─── Milestone 8: Real assignment API types ────────────────
 interface ApiAssignment {
@@ -57,6 +60,7 @@ type ResponderState = 'available' | 'assigned' | 'accepted' | 'en_route' | 'arri
 export default function ResponderPage() {
   const { lang, isUrdu, toggleLang } = useLanguage();
   const t = getTranslation(lang);
+  const { user, logout } = useAuth();
 
   const [activeTab, setActiveTab] = useState<'assignments' | 'map' | 'status' | 'profile'>('assignments');
   const [isOnline, setIsOnline] = useState(true);
@@ -314,6 +318,7 @@ export default function ResponderPage() {
   ];
 
   return (
+    <AuthGuard requiredRole="RESPONDER">
     <div dir={isUrdu ? 'rtl' : 'ltr'} className="min-h-screen bg-[#06080C] text-[#E6EDF3] flex flex-col items-center justify-start font-sans selection:bg-blue-600/30 selection:text-blue-200 relative pb-20 md:pb-6">
       {/* Toast Notification */}
       {notificationToast && (
@@ -334,10 +339,13 @@ export default function ResponderPage() {
             <Link href="/" className="p-1.5 rounded-xl bg-[#0B0E14] hover:bg-[#161B22] border border-[#30363D] text-gray-300 hover:text-white shrink-0 min-h-[38px] min-w-[38px] flex items-center justify-center transition-colors" title="Citizen Portal">
               <ArrowLeft className="w-4 h-4" />
             </Link>
-            <div className="w-8 h-8 rounded-xl bg-blue-600 flex items-center justify-center text-white font-black text-xs shrink-0 shadow-md shadow-blue-900/30">AK</div>
+            <div className="w-8 h-8 rounded-xl bg-blue-600 flex items-center justify-center text-white font-black text-xs shrink-0 shadow-md shadow-blue-900/30">{(user?.name || 'R').charAt(0)}</div>
             <div className="min-w-0">
               <div className="flex items-center gap-1.5">
-                <span className="font-extrabold text-xs sm:text-sm text-white truncate">{t.responderName}</span>
+                <span className="font-extrabold text-xs sm:text-sm text-white truncate">{user?.name || t.responderName}</span>
+                <button onClick={logout} className="p-0.5 text-gray-500 hover:text-red-400 transition-colors shrink-0" title="Logout">
+                  <LogOut className="w-3 h-3" />
+                </button>
                 <span className="text-gray-500 font-mono text-[10px]">•</span>
                 <span className="text-[11px] font-mono text-blue-400 font-bold truncate">{t.responderUnit}</span>
               </div>
@@ -777,5 +785,6 @@ export default function ResponderPage() {
       {showCaseDetailsSheet && <ResponderCaseDetailsSheet emergencyCase={currentCase} onClose={() => setShowCaseDetailsSheet(false)} />}
       {showSupportModal && <ResponderSupportModal caseId={currentCase.id} onClose={() => setShowSupportModal(false)} onSubmitSupportRequest={handleSendSupportRequest} />}
     </div>
+    </AuthGuard>
   );
 }

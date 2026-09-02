@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { Plus_Jakarta_Sans, Noto_Sans_Arabic } from 'next/font/google';
 import './globals.css';
 import { LanguageProvider } from '@/i18n/LanguageContext';
+import { AuthProvider } from '@/lib/auth/AuthContext';
 
 const jakarta = Plus_Jakarta_Sans({
   subsets: ['latin'],
@@ -25,7 +26,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" className={`${jakarta.variable} ${arabic.variable}`} suppressHydrationWarning>
       <body className="min-h-screen antialiased">
-        <LanguageProvider>{children}</LanguageProvider>
+        <LanguageProvider>
+          <AuthProvider>{children}</AuthProvider>
+        </LanguageProvider>
       </body>
     </html>
   );

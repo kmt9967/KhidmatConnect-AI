@@ -28,6 +28,8 @@ import { isGoogleMapsConfigured } from '@/lib/maps/googleMapsLoader';
 import { isLocationUnconfirmed } from '@/lib/maps/distance';
 import type { MapMarkerData } from '@/lib/maps/types';
 import OperatorCaseDrawer from '@/components/operator/OperatorCaseDrawer';
+import AuthGuard from '@/components/AuthGuard';
+import { useAuth } from '@/lib/auth/AuthContext';
 import Link from 'next/link';
 
 // ─── Milestone 8: Real API types ────────────────────────────
@@ -73,6 +75,7 @@ interface ApiAssignmentResult {
 export default function OperatorPage() {
   const { lang, isUrdu, toggleLang } = useLanguage();
   const t = getTranslation(lang);
+  const { user, logout } = useAuth();
 
   const [cases, setCases] = useState<EmergencyCase[]>(initialMockCases);
   const [selectedCaseId, setSelectedCaseId] = useState<string | null>('KC-2026-1048');
@@ -305,6 +308,7 @@ export default function OperatorPage() {
   const latestCriticalAlert = cases.find((c) => c.urgency === 'critical' && !c.assignedResource);
 
   return (
+    <AuthGuard requiredRole="OPERATOR">
     <div dir={isUrdu ? 'rtl' : 'ltr'} className="min-h-screen bg-[#080B10] text-[#E6EDF3] flex flex-col font-sans selection:bg-blue-600/30 selection:text-blue-200">
       {/* 1. TOP COMPACT OPERATOR COMMAND BAR */}
       <header className="bg-[#11161F] border-b border-[#30363D] px-4 sm:px-6 py-2.5 shrink-0 z-30">
@@ -325,13 +329,20 @@ export default function OperatorPage() {
           </div>
 
           <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-            <div className="hidden md:flex items-center gap-2 px-2.5 py-1 rounded-xl bg-[#0B0E14] border border-[#30363D] text-xs">
-              <div className="w-6 h-6 rounded-full bg-blue-600/30 border border-blue-500/50 text-blue-300 flex items-center justify-center font-bold text-[10px]">TJ</div>
-              <div className="text-[11px] leading-tight">
-                <span className="font-bold text-white block">Capt. Tariq Jameel</span>
-                <span className="text-[10px] text-gray-400 font-mono">EOC Dispatcher 04</span>
+            {user && (
+              <div className="hidden md:flex items-center gap-2 px-2.5 py-1 rounded-xl bg-[#0B0E14] border border-[#30363D] text-xs">
+                <div className="w-6 h-6 rounded-full bg-blue-600/30 border border-blue-500/50 text-blue-300 flex items-center justify-center font-bold text-[10px]">{(user.name || 'O').charAt(0)}</div>
+                <div className="text-[11px] leading-tight">
+                  <span className="font-bold text-white block">{user.name}</span>
+                  <span className="text-[10px] text-gray-400 font-mono">
+                    {isUrdu ? 'ڈیمو آپریٹر' : 'Demo Operator'}
+                  </span>
+                </div>
+                <button onClick={logout} className="p-1 text-gray-500 hover:text-red-400 transition-colors" title="Logout">
+                  <LogOut className="w-3 h-3" />
+                </button>
               </div>
-            </div>
+            )}
             <div className="relative">
               <button className="p-2 rounded-xl bg-[#0B0E14] hover:bg-[#161B22] border border-[#30363D] text-gray-300 hover:text-white transition-colors relative" title="Alerts">
                 <Bell className="w-4 h-4" />
@@ -707,5 +718,6 @@ export default function OperatorPage() {
         />
       )}
     </div>
+    </AuthGuard>
   );
 }
