@@ -1,0 +1,42 @@
+# KhidmatConnect AI — systemd service (production)
+#
+# Install:
+#   sudo cp deploy/systemd/khidmatconnect.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now khidmatconnect
+#
+# Env file format: plain KEY=value lines (systemd EnvironmentFile does NOT
+# do shell expansion — quote-free values, no "export"). Keep it out of git:
+#   sudo install -d -m 750 -o khidmat -g khidmat /etc/khidmatconnect
+#   sudo nano /etc/khidmatconnect/khidmatconnect.env
+#   sudo chmod 600 /etc/khidmatconnect/khidmatconnect.env
+
+[Unit]
+Description=KhidmatConnect AI (Next.js production server)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=khidmat
+Group=khidmat
+
+WorkingDirectory=/var/www/KhidmatConnect-AI
+EnvironmentFile=/etc/khidmatconnect/khidmatconnect.env
+Environment=NODE_ENV=production
+Environment=PORT=3000
+Environment=HOSTNAME=127.0.0.1
+
+ExecStart=/var/www/KhidmatConnect-AI/node_modules/.bin/next start -p 3000 -H 127.0.0.1
+# Audio cache lives outside the deploy dir (see VOICE_AUDIO_DIR in the env file).
+Restart=always
+RestartSec=5
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/var/lib/khidmatconnect
+
+[Install]
+WantedBy=multi-user.target

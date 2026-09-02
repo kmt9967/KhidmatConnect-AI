@@ -13,8 +13,7 @@
  * Caller falls back to Alibaba TTS, then to Twilio <Say>.
  */
 
-import fs from 'fs';
-import path from 'path';
+import { getAdcAccessToken } from './googleAdc';
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -50,38 +49,12 @@ async function getAccessToken(): Promise<string> {
     return cachedAccessToken;
   }
 
-  const adcPath = path.join(process.env.APPDATA || '', 'gcloud', 'application_default_credentials.json');
-
-  if (!fs.existsSync(adcPath)) {
-    throw new Error('ADC credentials not found. Run: gcloud auth application-default login');
-  }
-
-  const creds = JSON.parse(fs.readFileSync(adcPath, 'utf8'));
-
-  if (creds.type === 'authorized_user') {
-    const response = await fetch('https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        client_id: creds.client_id,
-        client_secret: creds.client_secret,
-        refresh_token: creds.refresh_token,
-        grant_type: 'refresh_token',
-      }),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error('Token refresh failed: ' + response.status + ' - ' + errorText.substring(0, 200));
-    }
-
-    const data = await response.json() as { access_token: string; expires_in: number };
-    cachedAccessToken = data.access_token;
-    tokenExpiry = Date.now() + (data.expires_in * 1000);
-    return cachedAccessToken!;
-  }
-
-  throw new Error('Unsupported ADC credential type');
+  // Shared cross-platform ADC resolution (env override → gcloud well-known
+  // path; supports both authorized_user and service_account credentials).
+  const access = await getAdcAccessToken();
+  cachedAccessToken = access.token;
+  tokenExpiry = access.expiryMs;
+  return cachedAccessToken;
 }
 
 // ─── Voice Selection ────────────────────────────────────────

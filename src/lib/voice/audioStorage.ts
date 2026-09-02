@@ -9,11 +9,24 @@
 import fs from 'fs';
 import path from 'path';
 
-const AUDIO_DIR = path.join(process.cwd(), '.audio-cache');
+/**
+ * Storage location is configurable so production can point at a persistent
+ * data directory (e.g. VOICE_AUDIO_DIR=/var/lib/khidmatconnect/audio)
+ * instead of relying on the app working directory. Falls back to
+ * .audio-cache under cwd for local development.
+ */
+const AUDIO_DIR =
+  process.env.VOICE_AUDIO_DIR || path.join(process.cwd(), '.audio-cache');
 
-// Ensure directory exists on module load
-if (!fs.existsSync(AUDIO_DIR)) {
-  fs.mkdirSync(AUDIO_DIR, { recursive: true });
+// Ensure directory exists on module load. Failure here must NOT crash the
+// whole app (voice is secondary); store/read operations will surface their
+// own errors if the directory is unusable.
+try {
+  if (!fs.existsSync(AUDIO_DIR)) {
+    fs.mkdirSync(AUDIO_DIR, { recursive: true });
+  }
+} catch (err) {
+  console.error('[audioStorage] Unable to create audio dir — voice playback may fail:', err);
 }
 
 /**
