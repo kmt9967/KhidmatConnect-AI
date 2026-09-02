@@ -32,11 +32,60 @@ export default function VoiceAiPage() {
   const [activeMobileTab, setActiveMobileTab] = useState<MobileTab>('call');
   const [isLowConfidence, setIsLowConfidence] = useState(false);
 
+  // Milestone 9: Real voice call data
+  const [isDemoMode, setIsDemoMode] = useState(true);
+  interface RealVoiceCall {
+    id: string;
+    status: string;
+    callerMasked: string;
+    detectedLanguage: string | null;
+    turnCount: number;
+    startedAt: string;
+    humanReviewRequired: boolean;
+    transcriptAvailable: boolean;
+    caseInfo: { caseCode: string; urgency: string | null; aiSummary: string | null; locationText: string | null; potentiallyCritical: boolean } | null;
+  }
+  const [realVoiceCalls, setRealVoiceCalls] = useState<RealVoiceCall[]>([]);
+
   // Live case draft
   const [extractedCase, setExtractedCase] = useState<VoiceCaseDraft>(mockVoiceCaseDraft);
 
   // Conversation
   const conversationTurns: TranscriptMessage[] = mockConversationTurns;
+
+  // Milestone 9: Poll real voice calls
+  useEffect(() => {
+    async function fetchVoiceCalls() {
+      try {
+        const res = await fetch('/api/operator/voice-calls');
+        if (res.ok) {
+          const data = await res.json();
+          const calls: RealVoiceCall[] = data.sessions || [];
+          setRealVoiceCalls(calls);
+          // If there are real calls, show the most recent active one
+          if (calls.length > 0 && !isDemoMode) {
+            const latest = calls.find(c => c.status === 'ACTIVE' || c.status === 'PROCESSING') || calls[0];
+            if (latest && latest.caseInfo) {
+              const ci = latest.caseInfo;
+              setExtractedCase(prev => ({
+                ...prev,
+                id: ci.caseCode,
+                urgency: (ci.urgency?.toLowerCase() as 'critical' | 'high' | 'medium') || 'medium',
+                status: latest.status === 'COMPLETED' ? 'Case Sent to Operator' : 'Capturing Information',
+                contact: latest.callerMasked,
+              }));
+            }
+          }
+        }
+      } catch {
+        // API unavailable
+      }
+    }
+
+    fetchVoiceCalls();
+    const interval = setInterval(fetchVoiceCalls, 10000);
+    return () => clearInterval(interval);
+  }, [isDemoMode]);
 
   // Timer
   useEffect(() => {
@@ -179,6 +228,20 @@ export default function VoiceAiPage() {
                   {t.voiceStandby}
                 </span>
               )}
+              {/* Milestone 9: DEMO/LIVE mode badge */}
+              <button
+                onClick={() => setIsDemoMode(!isDemoMode)}
+                className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold border transition-colors ${
+                  isDemoMode
+                    ? 'bg-gray-500/10 text-gray-400 border-gray-500/30 hover:text-white'
+                    : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                }`}
+              >
+                {isDemoMode ? 'DEMO MODE' : 'LIVE / REAL CALL'}
+                {realVoiceCalls.length > 0 && !isDemoMode && (
+                  <span className="ml-1 text-[9px]">({realVoiceCalls.length})</span>
+                )}
+              </button>
             </div>
             <p className="text-[11px] text-gray-400 hidden sm:block truncate">{t.voiceAiTagline}</p>
           </div>
@@ -187,9 +250,11 @@ export default function VoiceAiPage() {
           <div className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-[#161B22] border border-[#30363D] text-[11px] font-mono text-gray-300">
             <Radio className="w-3.5 h-3.5 text-blue-400 animate-pulse" />
             <span className="text-gray-400">Telephony:</span>
-            <span className="text-white font-semibold">1122 Gateway</span>
+            <span className="text-white font-semibold">Twilio</span>
             <span className="text-gray-500">•</span>
-            <span className="text-blue-400">Qwen AI</span>
+            <span className="text-blue-400">Alibaba ASR/TTS</span>
+            <span className="text-gray-500">•</span>
+            <span className="text-emerald-400">Qwen AI</span>
           </div>
           <button onClick={toggleLang} className="px-2.5 py-1.5 rounded-xl bg-[#161B22] hover:bg-[#21262D] border border-[#30363D] text-xs font-mono text-gray-200 hover:text-white flex items-center gap-1 transition-colors min-h-[36px]">
             <Globe className="w-3.5 h-3.5 text-blue-400" />
@@ -523,10 +588,10 @@ export default function VoiceAiPage() {
               </button>
               {showTechDetails && (
                 <div className="mt-2 p-3 rounded-xl bg-[#0B0E14] border border-[#30363D] space-y-2 text-[10px] font-mono text-gray-300">
-                  <div className="flex justify-between"><span className="text-gray-500">{t.voiceTelephonyProtocol}:</span><span className="text-blue-300">PSTN Inbound SIP</span></div>
-                  <div className="flex justify-between"><span className="text-gray-500">{t.voiceAsrModel}:</span><span className="text-emerald-300">Qwen-Voice-Realtime-Urdu</span></div>
-                  <div className="flex justify-between"><span className="text-gray-500">{t.voiceExtractionIntent}:</span><span className="text-white font-bold">EMERGENCY_MEDICAL_ALS</span></div>
-                  <div className="flex justify-between"><span className="text-gray-500">{t.voiceAudioSync}:</span><span className="text-emerald-400 font-bold">WebSocket 16kHz PCM</span></div>
+                  <div className="flex justify-between"><span className="text-gray-500">{t.voiceTelephonyProtocol}:</span><span className="text-blue-300">Twilio PSTN Webhook</span></div>
+                  <div className="flex justify-between"><span className="text-gray-500">{t.voiceAsrModel}:</span><span className="text-emerald-300">Alibaba ASR (Configurable)</span></div>
+                  <div className="flex justify-between"><span className="text-gray-500">{t.voiceExtractionIntent}:</span><span className="text-white font-bold">qwen3.7-plus Emergency</span></div>
+                  <div className="flex justify-between"><span className="text-gray-500">{t.voiceAudioSync}:</span><span className="text-emerald-400 font-bold">Turn-based Record/Play</span></div>
                 </div>
               )}
             </div>

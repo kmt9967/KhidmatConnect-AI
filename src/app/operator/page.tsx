@@ -88,6 +88,26 @@ export default function OperatorPage() {
   const [apiActiveCases, setApiActiveCases] = useState<ApiActiveCase[]>([]);
   const [apiCasesLoaded, setApiCasesLoaded] = useState(false);
 
+  // ─── Milestone 9: Voice call state ────────────────────────
+  interface VoiceCallInfo {
+    id: string;
+    status: string;
+    callerMasked: string;
+    detectedLanguage: string | null;
+    turnCount: number;
+    startedAt: string;
+    humanReviewRequired: boolean;
+    transcriptAvailable: boolean;
+    caseInfo: {
+      caseCode: string;
+      urgency: string | null;
+      aiSummary: string | null;
+      locationText: string | null;
+      potentiallyCritical: boolean;
+    } | null;
+  }
+  const [voiceCalls, setVoiceCalls] = useState<VoiceCallInfo[]>([]);
+
   useEffect(() => {
     setUseGoogleMap(isGoogleMapsConfigured());
   }, []);
@@ -115,11 +135,32 @@ export default function OperatorPage() {
     return () => clearInterval(interval);
   }, []);
 
+  // ─── Milestone 9: Poll voice calls ────────────────────────
+  useEffect(() => {
+    async function fetchVoiceCalls() {
+      try {
+        const res = await fetch('/api/operator/voice-calls');
+        if (res.ok) {
+          const data = await res.json();
+          setVoiceCalls(data.sessions || []);
+        }
+      } catch {
+        // Voice API unavailable — no voice calls to show
+      }
+    }
+
+    fetchVoiceCalls();
+    const interval = setInterval(fetchVoiceCalls, 10000);
+    return () => clearInterval(interval);
+  }, []);
+
   const selectedCase = cases.find((c) => c.id === selectedCaseId) || null;
 
   const criticalCount = cases.filter((c) => c.urgency === 'critical').length;
   const unassignedCount = cases.filter((c) => !c.assignedResource).length;
   const availableRespondersCount = mockReliefResources.filter((r) => r.availability === 'available').length;
+  const activeVoiceCalls = voiceCalls.filter((v) => v.status === 'ACTIVE' || v.status === 'PROCESSING').length;
+  const voiceReviewCount = voiceCalls.filter((v) => v.humanReviewRequired).length;
   const unconfirmedCases = cases.filter((c) => {
     // Use the real location-unconfirmed logic
     if (isLocationUnconfirmed({
@@ -316,7 +357,7 @@ export default function OperatorPage() {
 
       {/* 2. TOP SUMMARY METRICS STRIP */}
       <section className="bg-[#0B0E14] border-b border-[#30363D] px-4 sm:px-6 py-2.5 shrink-0">
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 sm:gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-2 sm:gap-3">
           <div onClick={() => { setActiveQueueTab('all_queue'); setActiveFilter('critical'); }} className="p-2.5 sm:p-3 rounded-xl bg-[#11161F] border border-red-500/40 hover:border-red-500/70 transition-all cursor-pointer flex items-center justify-between gap-2 shadow-sm">
             <div className="min-w-0">
               <span className="text-[10px] font-mono text-red-400 uppercase tracking-wider block">{isUrdu ? 'شدید' : '1. Critical'}</span>
@@ -368,6 +409,28 @@ export default function OperatorPage() {
             </div>
             <div className="w-8 h-8 rounded-lg bg-amber-500/20 text-amber-400 flex items-center justify-center shrink-0">
               <MapPin className="w-4 h-4" />
+            </div>
+          </div>
+
+          {/* Milestone 9: Voice Calls */}
+          <div className={`p-2.5 sm:p-3 rounded-xl border flex items-center justify-between gap-2 shadow-sm ${
+            activeVoiceCalls > 0 ? 'bg-purple-950/40 border-purple-400/60' : 'bg-[#11161F] border-purple-500/30'
+          }`}>
+            <div className="min-w-0">
+              <span className="text-[10px] font-mono text-purple-400 uppercase tracking-wider block">{isUrdu ? 'وائس کال' : '5. Voice Calls'}</span>
+              <div className="flex items-baseline gap-1.5">
+                <span className="text-lg sm:text-xl font-black text-purple-300 font-mono">{activeVoiceCalls}</span>
+                <span className="text-[11px] text-purple-400/80 font-medium">{isUrdu ? 'فعال' : 'Active'}</span>
+                {voiceReviewCount > 0 && (
+                  <span className="text-[9px] font-mono font-bold text-amber-300 bg-amber-500/20 px-1 rounded">{voiceReviewCount} review</span>
+                )}
+              </div>
+            </div>
+            <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
+              activeVoiceCalls > 0 ? 'bg-purple-500/30 text-purple-300' : 'bg-purple-500/10 text-purple-500'
+            }`}>
+              <Mic className="w-4 h-4" />
+              {activeVoiceCalls > 0 && <span className="absolute w-2 h-2 rounded-full bg-purple-400 animate-ping" />}
             </div>
           </div>
         </div>

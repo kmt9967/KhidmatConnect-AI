@@ -115,12 +115,27 @@ enum CaseUpdateType {
   COMPLETED
   OPERATOR_NOTE
   CASE_CLOSED
+  VOICE_CALL_STARTED
+  VOICE_TRANSCRIPT_UPDATED
+  VOICE_AI_UPDATED
+  VOICE_CALL_DISCONNECTED
+  VOICE_CALL_COMPLETED
+  VOICE_ASR_FAILED
+  VOICE_TTS_FALLBACK
 }
 
 enum NormalRequestStatus {
   SUBMITTED
   IN_REVIEW
   COMPLETED
+}
+
+enum VoiceCallStatus {
+  ACTIVE
+  PROCESSING
+  COMPLETED
+  DISCONNECTED
+  FAILED
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -183,10 +198,11 @@ model EmergencyCase {
   closedAt             DateTime?
 
   // Relations
-  categories   EmergencyCaseCategory[]
-  accessTokens CaseAccessToken[]
-  assignments  Assignment[]
-  updates      CaseUpdate[]
+  categories        EmergencyCaseCategory[]
+  accessTokens      CaseAccessToken[]
+  assignments       Assignment[]
+  updates           CaseUpdate[]
+  voiceCallSessions VoiceCallSession[]
 
   @@index([status])
   @@index([createdAt])
@@ -366,4 +382,55 @@ model NormalRequest {
   @@index([userId])
   @@index([status])
   @@map("normal_requests")
+}
+
+/// Twilio voice call session — tracks one phone emergency intake.
+/// providerCallSid is unique to prevent duplicate case creation on webhook retry.
+model VoiceCallSession {
+  id                  String          @id @default(cuid())
+  emergencyCaseId     String?
+  provider            String          @default("TWILIO")
+  providerCallSid     String          @unique
+  callerNumber        String
+  status              VoiceCallStatus @default(ACTIVE)
+  detectedLanguage    String?
+  startedAt           DateTime        @default(now())
+  endedAt             DateTime?
+  lastActivityAt      DateTime        @default(now())
+  turnCount           Int             @default(0)
+  recordingReference  String?
+  transcriptText      String?
+  humanReviewRequired Boolean         @default(false)
+  failureReason       String?
+
+  // Async processing state for voice pipeline
+  processingState     String?         // IDLE, RECORDING_RECEIVED, PROCESSING_ASR, PROCESSING_AI, PROCESSING_TTS, RESPONSE_READY, FAILED
+  responseAudioPath   String?         // Path to generated TTS audio file
+  responseText        String?         // AI response text for current turn
+  processingStartedAt DateTime?
+  processingCompletedAt DateTime?
+
+  emergencyCase EmergencyCase?  @relation(fields: [emergencyCaseId], references: [id])
+  turns         VoiceCallTurn[]
+
+  @@index([providerCallSid])
+  @@index([emergencyCaseId])
+  @@index([status])
+  @@map("voice_call_sessions")
+}
+
+/// Individual caller/AI turn within a voice call session.
+model VoiceCallTurn {
+  id                 String   @id @default(cuid())
+  voiceCallSessionId String
+  speaker            String // CALLER | AI
+  transcript         String
+  recordingReference String?
+  detectedLanguage   String?
+  createdAt          DateTime @default(now())
+
+  session VoiceCallSession @relation(fields: [voiceCallSessionId], references: [id], onDelete: Cascade)
+
+  @@index([voiceCallSessionId, createdAt])
+  @@map("voice_call_turns")
 }
