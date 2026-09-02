@@ -17,6 +17,7 @@
     "seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
+    "@google-cloud/speech": "^8.0.1",
     "@googlemaps/js-api-loader": "^2.1.1",
     "@prisma/client": "^5.22.0",
     "lucide-react": "^1.37.0",
@@ -25,6 +26,7 @@
     "openai": "^7.8.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "twilio": "^6.1.0",
     "zod": "^4.5.4"
   },
   "devDependencies": {

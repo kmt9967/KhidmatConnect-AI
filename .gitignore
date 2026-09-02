@@ -25,3 +25,26 @@ Thumbs.db
 
 # TypeScript cache
 *.tsbuildinfo
+
+# Test audio recordings (personal voice data)
+scripts/voice-test-audio/
+*.wav
+*.mp3
+*.webm
+*.ogg
+!scripts/voice-test-audio/.gitkeep
+
+# Generated test result files
+scripts/*-results.json
+scripts/*-test-results.json
+
+# TTS voice comparison samples (generated audio)
+scripts/tts-comparison/google/*.wav
+scripts/tts-comparison/google/*.mp3
+scripts/tts-samples/
+
+# Generated audio cache
+.audio-cache/
+
+# Cloudflare tunnel binary
+cloudflared.exe
