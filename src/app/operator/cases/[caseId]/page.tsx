@@ -290,6 +290,7 @@ export default function OperatorCaseDetailPage() {
   const activeAssignment = caseData?.assignments?.find(a =>
     ['PENDING', 'ACCEPTED', 'EN_ROUTE', 'ARRIVED'].includes(a.status)
   );
+  const completedAssignment = caseData?.assignments?.find(a => a.status === 'COMPLETED');
 
   // Map markers
   const mapMarkers: MapMarkerData[] = [];
@@ -568,6 +569,22 @@ export default function OperatorCaseDetailPage() {
                         {activeAssignment.ambulance && <p className="text-[#8B949E] flex items-center gap-1.5"><Navigation className="w-3 h-3" />{activeAssignment.ambulance.identifier} — {activeAssignment.ambulance.vehicleNumber}</p>}
                         {activeAssignment.resource && <p className="text-[#8B949E]">{activeAssignment.resource.name}</p>}
                         <p className="text-[#6E7681] text-[10px]">Assigned {formatDate(activeAssignment.assignedAt)}</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {completedAssignment && (
+                  <div className="mb-4 p-3 rounded-xl bg-[#3FB950]/5 border border-[#3FB950]/20">
+                    <div className="flex items-center gap-2 mb-2">
+                      <CheckCircle2 className="w-4 h-4 text-[#3FB950]" />
+                      <span className="text-xs font-bold text-[#3FB950]">Completed Assignment</span>
+                    </div>
+                    {completedAssignment.responder && (
+                      <div className="text-xs space-y-1">
+                        <p className="text-[#C9D1D9] flex items-center gap-1.5"><User className="w-3 h-3" />{completedAssignment.responder.name} ({completedAssignment.responder.responderType})</p>
+                        {completedAssignment.ambulance && <p className="text-[#8B949E] flex items-center gap-1.5"><Navigation className="w-3 h-3" />{completedAssignment.ambulance.identifier} — {completedAssignment.ambulance.vehicleNumber}</p>}
+                        <p className="text-[#6E7681] text-[10px]">Assigned {formatDate(completedAssignment.assignedAt)} • Completed {completedAssignment.completedAt ? formatDate(completedAssignment.completedAt) : 'N/A'}</p>
                       </div>
                     )}
                   </div>

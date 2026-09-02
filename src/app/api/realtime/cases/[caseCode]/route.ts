@@ -28,7 +28,7 @@ export async function GET(
         longitude: true,
         assignments: {
           where: {
-            status: { in: ['PENDING', 'ACCEPTED', 'EN_ROUTE', 'ARRIVED'] },
+            status: { in: ['PENDING', 'ACCEPTED', 'EN_ROUTE', 'ARRIVED', 'COMPLETED'] },
           },
           select: {
             id: true,

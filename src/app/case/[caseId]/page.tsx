@@ -482,6 +482,7 @@ export default function CaseStatusPage() {
                         {/* Assignment status badge */}
                         <div className="flex items-center gap-2">
                           <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-bold ${
+                            a.status === 'COMPLETED' ? 'border-green-500/30 bg-green-500/10 text-green-400' :
                             a.status === 'EN_ROUTE' ? 'border-blue-500/30 bg-blue-500/10 text-blue-400' :
                             a.status === 'ARRIVED' ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400' :
                             a.status === 'ACCEPTED' ? 'border-amber-500/30 bg-amber-500/10 text-amber-400' :
