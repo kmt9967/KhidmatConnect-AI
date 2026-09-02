@@ -1,20 +1,22 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { assignCaseSchema } from '@/lib/validation/assignment';
 import { createAssignment, getAvailableResources } from '@/lib/services/assignmentService';
-import { resolveDemoOperator } from '@/lib/services/demoIdentity';
+import { requireRole } from '@/lib/auth/session';
 
 /**
  * POST /api/operator/cases/[caseCode]/assign
  *
  * Operator assigns a responder (+ optional ambulance/resource) to a case.
- *
- * TEMPORARY: Uses demo operator identity until auth is implemented.
+ * Requires OPERATOR role (server-side JWT session check).
  */
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ caseCode: string }> }
 ) {
   try {
+    // Server-side auth: require OPERATOR role
+    const operator = await requireRole('OPERATOR');
+
     const { caseCode } = await params;
     const body = await request.json();
 
@@ -27,10 +29,7 @@ export async function POST(
       );
     }
 
-    // Resolve demo operator
-    const operator = await resolveDemoOperator();
-
-    // Create assignment
+    // Create assignment using authenticated operator
     const result = await createAssignment({
       caseCode,
       responderId: parsed.data.responderId,
@@ -41,6 +40,12 @@ export async function POST(
 
     return NextResponse.json(result, { status: 201 });
   } catch (error) {
+    if (error instanceof Error && error.message === 'Role OPERATOR required') {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+    if (error instanceof Error && error.message === 'Authentication required') {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
     const message = error instanceof Error ? error.message : 'Assignment failed';
     return NextResponse.json({ error: message }, { status: 400 });
   }

@@ -646,10 +646,10 @@ export default function OperatorPage() {
                             <Clock className="w-3 h-3" /><span>{isUrdu ? 'بغیر تفویض' : 'UNASSIGNED'}</span>
                           </span>
                         )}
-                        <span className="text-blue-400 text-[10px] flex items-center gap-0.5 font-sans font-bold">
+                        <Link href={`/operator/cases/${item.id}`} onClick={(e) => e.stopPropagation()} className="text-blue-400 text-[10px] flex items-center gap-0.5 font-sans font-bold hover:text-blue-300 transition-colors">
                           <span>{isUrdu ? 'تفصیلات' : 'Details'}</span>
                           <ChevronRight className="w-3 h-3" />
-                        </span>
+                        </Link>
                       </div>
                     </div>
                   );
