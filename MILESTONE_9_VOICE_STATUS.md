@@ -1,6 +1,11 @@
 # Milestone 9 — Voice AI Emergency Intake
 
-## Status: WORKING PROTOTYPE (Checkpoint)
+## Status: LEGACY PROTOTYPE — superseded by Retell AI (see M9_RETELL_ARCHITECTURE.md)
+
+> **2026-09-03:** The realtime conversational phone experience moved to
+> **Retell AI** (`/api/voice/retell/*`, `src/lib/voice/retell*`). This Twilio
+> record→ASR→TTS prototype is preserved intact for reference and fallback —
+> it is NOT the final-demo voice path and is no longer being optimized.
 
 Voice AI phone-based emergency intake is functional but not production-ready.
 Further optimization is **parked** until end of project.
