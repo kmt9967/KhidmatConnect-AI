@@ -87,16 +87,25 @@ async function main() {
   console.log(`✅ RESPONDER user ${ahmedUser.name}  (${ahmedUser.phone})  id=${ahmedUser.id}`);
 
   // ─── 2. Ahmed Khan's Responder record, linked via userId ──
+  // Schema note: Responder.userId is REQUIRED (String @unique) — a "userId:
+  // null" filter is a Prisma validation error, and no responder row can ever
+  // be unlinked. Match order:
+  //   a. responder already linked to the canonical login User
+  //   b. responder carrying the seed's stable demo phone (linked to a legacy
+  //      duplicate User row) → re-point its userId to the canonical User
+  //   c. responder named 'Ahmed Khan' → re-point likewise
+  //   d. none exists → create exactly one, linked to the canonical User
+  // Re-pointing never touches assignments (they reference responder.id) and
+  // never renames/deletes any row.
   let responder = await prisma.responder.findUnique({ where: { userId: ahmedUser.id } });
   if (!responder) {
-    // No linked record. Adopt an existing unlinked Ahmed Khan responder row
-    // if one exists (fixes userId linkage), otherwise create a fresh one.
-    const unlinked = await prisma.responder.findFirst({
-      where: { name: 'Ahmed Khan', userId: null },
-    });
-    if (unlinked) {
-      responder = await prisma.responder.update({ where: { id: unlinked.id }, data: { userId: ahmedUser.id } });
-      console.log(`🔗 Adopted unlinked Ahmed Khan responder record id=${responder.id}`);
+    const byPhone = await prisma.responder.findFirst({ where: { phone: '0333-5121001' } });
+    const legacy = byPhone ?? (await prisma.responder.findFirst({ where: { name: 'Ahmed Khan' } }));
+    if (legacy) {
+      // userId is @unique: only safe while the canonical user has no responder
+      // (guaranteed — we are inside the !responder branch).
+      responder = await prisma.responder.update({ where: { id: legacy.id }, data: { userId: ahmedUser.id } });
+      console.log(`🔗 Re-pointed existing Ahmed Khan responder (${legacy.name}/${legacy.phone}) from user ${legacy.userId} → ${ahmedUser.id}`);
     } else {
       responder = await prisma.responder.create({
         data: {
