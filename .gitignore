@@ -51,3 +51,6 @@ cloudflared.exe
 
 # Session verification screenshots (root-level artifacts, never commit)
 /*.png
+
+# Deployable build artifacts (upload manually to hosting; never commit)
+khidmatconnect-next-build.zip

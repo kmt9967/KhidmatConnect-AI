@@ -322,7 +322,16 @@ async function main() {
   await prisma.voiceCallTurn.deleteMany({ where: { session: { providerCallSid: 'DEMO-VOICE-SEED-SID-0001' } } }).catch(() => {});
   await prisma.voiceCallSession.deleteMany({ where: { providerCallSid: 'DEMO-VOICE-SEED-SID-0001' } }).catch(() => {});
 
-  // ─── 2. Ensure demo operator + responder pool ─────────────
+  // ─── 2. Ensure demo login identities + operator + responder pool ───
+  // These three phones are what /api/auth/login resolves (DEMO_ACCOUNTS in
+  // src/lib/auth/session.ts). Upserting them here makes the demo seed the
+  // single source of truth — a server that only ran demo:seed can still log in.
+  await prisma.user.upsert({
+    where: { phone: '0300-8241001' },
+    update: { role: 'CITIZEN' },
+    create: { name: 'Ahmed Tariq', phone: '0300-8241001', role: 'CITIZEN', preferredLanguage: 'EN' },
+  });
+
   const operator = await prisma.user.upsert({
     where: { phone: '0300-1122001' },
     update: { role: 'OPERATOR' },
@@ -365,6 +374,9 @@ async function main() {
   }
 
   // Existing seeded responders get sensible Karachi positions.
+  // Ahmed Khan (0333-5121001) is the canonical RESPONDER login identity — he
+  // anchors the live walkthrough and stays unassigned by demo scenarios.
+  const ahmedKhan = await ensureResponderUserAndRecord('demo-responder-ahmed-khan', 'Ahmed Khan', '0333-5121001', 'PARAMEDIC', 24.92, 67.09);
   const sara = await ensureResponderUserAndRecord('demo-responder-sara', 'Sara Ali', '0333-5121002', 'FIELD_RESCUER', 24.8805, 67.0965);
   // Additional demo field resources so multiple live-stage assignments can coexist.
   const bilal = await ensureResponderUserAndRecord('demo-responder-bilal', 'Bilal Ahmed', '0344-5550110', 'FIELD_RESCUER', 24.9061, 67.1540);
@@ -594,7 +606,9 @@ async function main() {
   }
 
   // ─── 5. Primary live-demo resource readiness ───────────────
-  const ahmed = await prisma.responder.findFirst({ where: { name: 'Ahmed Khan' } });
+  // Ahmed Khan is ensured above; section 4 never assigns him, so this only
+  // restores AVAILABLE if a previous run/manual state left him idle-stale.
+  const ahmed = ahmedKhan;
   if (ahmed) {
     const activeOfAhmed = await prisma.assignment.findFirst({
       where: { responderId: ahmed.id, status: { in: ['PENDING', 'ACCEPTED', 'EN_ROUTE', 'ARRIVED'] } },
