@@ -18,6 +18,8 @@ import type { VoiceCallStatus } from '@prisma/client';
 export interface CreateVoiceSessionInput {
   providerCallSid: string;
   callerNumber: string;
+  /** Telephony/conversation provider. 'TWILIO' (legacy prototype) or 'RETELL' (M9 final voice). */
+  provider?: string;
 }
 
 export interface VoiceSessionResult {
@@ -123,6 +125,7 @@ export async function createVoiceSession(input: CreateVoiceSessionInput): Promis
       // 4. Create voice call session linked to the case
       const session = await tx.voiceCallSession.create({
         data: {
+          provider: input.provider ?? 'TWILIO',
           providerCallSid: input.providerCallSid,
           callerNumber: input.callerNumber,
           emergencyCaseId: emergencyCase.id,
