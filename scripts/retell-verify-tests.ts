@@ -30,9 +30,11 @@ import {
   isNormalRetellDisconnect,
   buildToolAgentMessage,
   retellToolArgsSchema,
+  stripNullKeys,
   handleRetellWebhook,
   handleRetellToolCall,
   runQwenAnalysis,
+  setQwenAnalyzerForTests,
   type RetellCallObject,
 } from '../src/lib/voice/retellService';
 import { getSessionByCallSid } from '../src/lib/voice/voiceService';
@@ -122,7 +124,7 @@ section('A4. Disconnect classification');
 
 section('A5. No-false-dispatch guard (safety rule 5)');
 {
-  const forbidden = ['dispatched', 'on the way', 'on its way', 'has been assigned', 'is coming'];
+  const forbidden = ['dispatched', 'on the way', 'on its way', 'has been assigned', 'assigned', 'ambulance sent', 'is coming'];
   const noAssignment = buildToolAgentMessage({ caseCode: 'KC-2026-999999', hasRealAssignment: false });
   const spoken = noAssignment.say_to_caller.toLowerCase();
   for (const phrase of forbidden) {
@@ -147,6 +149,21 @@ section('A6. Tool argument strictness (no invented facts, missing GPS allowed)')
   assert(!retellToolArgsSchema.safeParse({ urgency: 'CRITICAL' }).success, 'unknown arg rejected (.strict) — agent cannot inject urgency');
   assert(!retellToolArgsSchema.safeParse({ people_affected: 1e9 }).success, 'absurd people_affected rejected');
   assert(retellToolArgsSchema.safeParse({ emergency_category: 'MEDICAL', location_confirmed: true }).success, 'valid category+flag accepted');
+
+  // Retell sends unknown optional params as explicit null (production 400 root
+  // cause) — null must behave exactly like "not provided":
+  assert(retellToolArgsSchema.safeParse({ location_text: 'Gulshan Block 7', people_affected: null }).success, 'null people_affected accepted');
+  assert(retellToolArgsSchema.safeParse({ people_affected: null, location_confirmed: null }).success, 'null location_confirmed accepted');
+  assert(retellToolArgsSchema.safeParse({ caller_details: 'Building fire', emergency_category: null }).success, 'null emergency_category accepted');
+  assert(
+    retellToolArgsSchema.safeParse({ location_text: null, location_confirmed: null, emergency_category: null, people_affected: null, caller_details: null }).success,
+    'ALL-NULL optional args accepted (safe no-op)',
+  );
+  const nullStrip = retellToolArgsSchema.safeParse({ location_text: 'X', people_affected: null });
+  assert(nullStrip.success && (nullStrip.data as { people_affected?: number }).people_affected === undefined, 'null normalized to undefined — not coerced to a value');
+  assert(!retellToolArgsSchema.safeParse({ people_affected: 'five' }).success, 'real invalid value NOT coerced ("five" stays rejected)');
+  assert(!retellToolArgsSchema.safeParse({ people_affected: false }).success, 'false is not null — wrong type still rejected');
+  assert(JSON.stringify(stripNullKeys({ a: 1, b: null, c: false, d: null })) === '{"a":1,"c":false}', 'stripNullKeys preserves non-null values');
 }
 
 // ═══ PART B — LOCALHOST DB INTEGRATION ═════════════════════
@@ -243,27 +260,83 @@ try {
     assert((caseT?.transcript ?? '').includes(urduTurn), 'cumulative transcript on the case');
   }
 
-  section('B4. update_case tool → persists caller facts, no invented data');
+  section('B4. update_case fast path — null-safe, idempotent, NEVER awaits Qwen');
   {
-    const res = await handleRetellToolCall(callObject({ call_id: R1 }), {
+    const sess = await getSessionByCallSid(R1);
+    const caseId = sess!.emergencyCaseId!;
+
+    // Mock Qwen at 3 s (represents the real 25-30 s analysis proportionally):
+    // the tool response must return well under it and the mock must run AFTER.
+    let slowCalls = 0;
+    setQwenAnalyzerForTests(async () => {
+      await new Promise((r) => setTimeout(r, 3000));
+      slowCalls++;
+      return { success: false, analysis: null, error: 'mock slow', model: 'mock' };
+    });
+
+    // Exactly what Retell sends in production: unknown optionals as NULL.
+    const rawArgs = {
       location_text: 'Liaquatabad No. 12, Karachi',
+      location_confirmed: null,
       emergency_category: 'MEDICAL',
       people_affected: 1,
       caller_details: urduTurn + '. ' + englishTurn,
-    });
-    const sess = await getSessionByCallSid(R1);
+    };
+    const parsed = retellToolArgsSchema.parse(rawArgs);
+    const t0 = Date.now();
+    const res = await handleRetellToolCall(callObject({ call_id: R1 }), parsed);
+    const latency = Date.now() - t0;
+    console.log(`  measured update_case latency: ${latency}ms (mock Qwen duration: 3000ms)`);
+
+    assert(res.ok === true && !!res.case_number, 'tool ack with case number (null args accepted)');
+    assert(latency < 1500, `update_case responded in ${latency}ms (<1500ms) despite 3000ms mock Qwen`);
+    assert(slowCalls === 0, 'response path does NOT await analyzeEmergency (0 runs at reply time)');
+    assert(res.analysis_status === 'pending', 'analysis_status pending — capture returned before AI');
+    assert(res.assignment_confirmed === false, 'no real Assignment → assignment_confirmed false');
+
     const c = await prisma.emergencyCase.findUnique({
-      where: { id: sess!.emergencyCaseId! },
+      where: { id: caseId },
       include: { categories: true, updates: true },
     });
-    assert(res.status === 'received' && !!res.case_code, 'tool ack with case code');
     assert(c?.locationText === 'Liaquatabad No. 12, Karachi', 'location persisted');
     assert(c?.peopleAffected === 1, 'peopleAffected persisted');
+    assert(c?.locationConfirmed === false, 'null location_confirmed → unknown → false, never guessed true');
     assert(c?.categories.some((x) => x.category === 'MEDICAL'), 'category added');
-    assert(c?.originalMessage.includes(urduTurn), 'raw caller details replaced provisional placeholder verbatim');
-    assert(c?.updates.some((u) => u.updateType === 'REQUESTER_INFORMATION_ADDED'), 'audit entry for caller facts');
+    assert(c?.originalMessage.includes(urduTurn), 'raw Urdu+English caller details replaced provisional placeholder verbatim');
     assert(!res.say_to_caller.toLowerCase().includes('dispatched'), 'tool reply contains no dispatch claim');
-    assert(typeof res.urgency !== 'string' || res.urgency.length > 0, 'urgency passed through only when analyzed');
+
+    // Duplicate identical tool call (Flex-loop re-invocation) → same case, no dupes.
+    const res2 = await handleRetellToolCall(callObject({ call_id: R1 }), retellToolArgsSchema.parse(rawArgs));
+    assert(res2.case_id === res.case_id, 'repeat update_case resolves the SAME EmergencyCase');
+    const sessions = await prisma.voiceCallSession.count({ where: { providerCallSid: R1 } });
+    const audits = await prisma.caseUpdate.count({ where: { emergencyCaseId: caseId, updateType: 'REQUESTER_INFORMATION_ADDED' } });
+    assert(sessions === 1, 'duplicate tool call did not duplicate the session');
+    assert(audits === 1, `identical repeat call not re-audited (got ${audits} audit rows)`);
+
+    // All-null args → accepted as safe no-op, no writes, no audit spam.
+    const noop = await handleRetellToolCall(callObject({ call_id: R1 }), retellToolArgsSchema.parse({ location_text: null, people_affected: null, caller_details: null }));
+    assert(noop.ok === true && noop.updated === false, 'all-null tool call accepted as safe no-op');
+    const factAudits = await prisma.caseUpdate.count({ where: { emergencyCaseId: caseId, updateType: { in: ['REQUESTER_INFORMATION_ADDED', 'VOICE_AI_UPDATED'] } } });
+    assert(factAudits === 1, `no-op wrote nothing (got ${factAudits})`);
+
+    // Async analysis must have run EXACTLY ONCE after the responses (deduped).
+    await new Promise((r) => setTimeout(r, 3600));
+    assert(slowCalls === 1, `detached Qwen ran exactly once after return (got ${slowCalls}) — not blocked, not piled up`);
+
+    // Qwen total failure → update_case still succeeds, status reflects reality.
+    setQwenAnalyzerForTests(async () => { throw new Error('mock total outage'); });
+    const t1 = Date.now();
+    const failRes = await handleRetellToolCall(callObject({ call_id: R1 }), retellToolArgsSchema.parse({ caller_details: 'اماں کو ہوش نہیں ہے — فیملی پریشان ہے' }));
+    console.log(`  measured update_case latency during Qwen outage: ${Date.now() - t1}ms`);
+    assert(failRes.ok === true && Date.now() - t1 < 1500, 'update_case OK while Qwen mock throws immediately');
+    assert(failRes.analysis_status === 'needs_human_review', 'prior AI failure surfaces as needs_human_review');
+    const urduAudit = await prisma.caseUpdate.findFirst({
+      where: { emergencyCaseId: caseId, updateType: 'REQUESTER_INFORMATION_ADDED' },
+      orderBy: { createdAt: 'desc' },
+    });
+    assert((urduAudit?.message ?? '').includes('اماں کو ہوش نہیں ہے'), 'Urdu tool text stored unchanged (authoritative)');
+    await new Promise((r) => setTimeout(r, 400));
+    setQwenAnalyzerForTests(null); // restore the real analyzer for remaining tests
   }
 
   section('B5. Qwen failure never loses the case');
@@ -301,7 +374,7 @@ try {
     const res = await handleRetellToolCall(callObject({ call_id: R2 }), { caller_details: 'Flood water entered house, family stuck on roof' });
     const sess = await getSessionByCallSid(R2);
     assert(!!sess && !!sess.emergencyCaseId, 'session+case lazily created when call_started was lost');
-    assert(res.status === 'received', 'tool answered with real case code');
+    assert(res.ok === true && res.case_number.startsWith('KC-'), 'tool answered with real case number');
     if (sess?.emergencyCaseId) createdCaseIds.push(sess.emergencyCaseId);
 
     await handleRetellWebhook('transcript_updated', callObject({

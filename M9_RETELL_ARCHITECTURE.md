@@ -28,7 +28,7 @@ now marked LEGACY PROTOTYPE. Retell replaces it only at the conversation layer.
 | Webhooks deliver `{ "event", "call" }` to ONE URL: `call_started`, `transcript_updated`, `call_ended`, `call_analyzed` (+ transfer events) | Single dispatcher endpoint `/api/voice/retell/webhook` — NOT one endpoint per lifecycle stage as originally sketched |
 | Webhooks are HMAC-SHA256 signed: header `X-Retell-Signature: v={ts_ms},d={hex}`, digest = HMAC(rawBody + ts, **the API key that has the webhook badge**) | We verify with our `RETELL_API_KEY`; there is **no separate webhook secret** env var in Retell |
 | Webhook timeout 10 s, up to 3 retries | Endpoints persist fast and return 2xx; Qwen enrichment runs as a detached async job; dedup via unique `call_id` |
-| **Custom Functions**: Retell POSTs `{ name, call, args }` synchronously to our public HTTPS URL during the call (timeout configurable 1–600 s, same `X-Retell-Signature`) | Mid-call tool `/api/voice/retell/update-case`; 120 s default is enough to persist details + await Qwen and answer the agent |
+| **Custom Functions**: Retell POSTs `{ name, call, args }` synchronously to our public HTTPS URL during the call (timeout configurable 1–600 s, same `X-Retell-Signature`) | Mid-call tool `/api/voice/retell/update-case`; responds in <2s — facts persisted synchronously, Qwen analysis detached |
 | Call object carries `transcript_object` (utterances), `transcript`, `disconnection_reason`, `call_analysis` after analysis | Transcript persistence reads `transcript_object`; per-utterance `utterance_id` maps onto existing `VoiceCallTurn.recordingReference` dedup |
 | Retell-managed number purchase is **US/CA only**; Pakistan numbers require BYO telephony (elastic SIP trunk / `POST /import-phone-number`) | Phone-number cutover is a LATER ops step (out of scope now, per instructions). Demo/testing uses Retell dashboard/test calling |
 | Urdu (`ur-IN`) supported for ASR via Azure/Soniox and TTS via ElevenLabs(`eleven_v3`)/OpenAI/Fish; code-switching via Soniox | Agent console config listed in §8; no code change needed for multilingual — we store raw text verbatim |
@@ -56,12 +56,13 @@ Caller dials hotline (Retell telephony / SIP-imported number)
        │     • verify signature; ensure session exists (recovers lost call_started)
        │     • persist ONLY caller-provided facts: locationText, category,
        │       peopleAffected, raw caller details → CaseUpdate audit
-       │     • Alibaba Qwen analyzeEmergency() on raw transcript →
-       │       enrichCaseWithAiAnalysis() | recordAiAnalysisFailure()  (case survives either)
-       │     • respond JSON to the agent:
-       │       { status, caseCode, aiAnalysisStatus, urgency, message_for_agent }
-       │       message_for_agent is built by NO-FALSE-DISPATCH guard: without a real
-       │       Assignment it may only say "case registered, human coordinator reviewing"
+       │     • Alibaba Qwen scheduled DETACHED — response returns fast (<2s);
+       │       analysis completes later (enrich | AI_ANALYSIS_FAILED; case survives either)
+       │     • respond JSON to the agent (capture acknowledgment only):
+       │       { ok, case_id, case_number, updated, analysis_status,
+       │         assignment_confirmed, say_to_caller, instruction }
+       │       say_to_caller is built by the NO-FALSE-DISPATCH guard: without a real
+       │       active Assignment it may only acknowledge capture / coordinator review
        │
        ├─ call_ended webhook
        │     • final transcript sync (partial preserved if call dropped)
@@ -95,7 +96,7 @@ Case appears in existing operator queue (/operator, /api/operator/voice-calls)
 | `src/lib/voice/retellSecurity.ts` | `X-Retell-Signature` parse + HMAC-SHA256 verify (raw body, replay window, `timingSafeEqual`), `isRetellConfigured()` |
 | `src/lib/voice/retellService.ts` | typed Retell payloads; pure helpers (utterance extraction, speaker mapping, language tagging, disconnect classification, no-false-dispatch message builder); event handlers; custom-function handler; detached Qwen fallback |
 | `src/app/api/voice/retell/webhook/route.ts` | single signed event dispatcher (204 fast; 500 only on retryable infra errors) |
-| `src/app/api/voice/retell/update-case/route.ts` | synchronous signed custom-function endpoint |
+| `src/app/api/voice/retell/update-case/route.ts` | fast signed custom-function endpoint (AI never in response path) |
 | `scripts/retell-verify-tests.ts` | offline + localhost-DB verification suite |
 
 Modified: `voiceService.ts` (+optional `provider`), `.env.example` (+Retell block),
@@ -129,7 +130,7 @@ the cPanel PostgreSQL instance (which already has operational migration constrai
 3. LLM: keep Retell-hosted (do NOT configure Custom LLM → our Qwen is never bypassed nor replaced into conversation).
 4. Custom Function `update_case` → `POST https://khidmatconnect.teqprotech.com/api/voice/retell/update-case`,
    params: `location_text`, `emergency_category`, `people_affected`, `caller_details` (raw facts),
-   timeout 30–60 s, `max_retry = 0` (endpoint is idempotent anyway).
+   timeout: default 3 s is sufficient (backend returns <2s; Qwen is async), `max_retry = 0` (endpoint is idempotent anyway).
 5. Webhook URL (agent-level `webhook_url` or account System Settings):
    `https://khidmatconnect.teqprotech.com/api/voice/retell/webhook`,
    `webhook_events`: `call_started`, `transcript_updated`, `call_ended`, `call_analyzed`.
