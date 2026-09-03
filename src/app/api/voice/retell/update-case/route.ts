@@ -12,10 +12,12 @@
  *   • Case is captured first — if call_started was lost, we create the
  *     provisional case + session here before anything else.
  *   • Only caller-provided facts are persisted; args are strict-validated.
- *   • Alibaba Qwen performs the structured analysis synchronously (custom
- *     functions allow long timeouts); a Qwen failure never loses the case.
+ *     Optional args sent as null by Retell mean "not provided" (stripped
+ *     before validation) — a null never rejects a valid update.
+ *   • RESPONSE RETURNS FAST (<2s target): Alibaba Qwen analysis is scheduled
+ *     asynchronously and can never delay or break this call.
  *   • The reply is built by the NO-FALSE-DISPATCH guard: without a real
- *     active Assignment the agent may only say "registered / under review".
+ *     active Assignment the agent may only say "recorded / under review".
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { isRetellConfigured, verifyRetellRequest } from '@/lib/voice/retellSecurity';
