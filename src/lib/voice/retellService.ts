@@ -27,6 +27,7 @@
  * from_number, disconnection_reason, transcript_object, call_analysis.
  */
 import { z } from 'zod';
+import { createHash } from 'crypto';
 import { prisma } from '@/lib/db/prisma';
 import {
   addVoiceTurn,
@@ -41,8 +42,15 @@ import { enrichCaseWithAiAnalysis, recordAiAnalysisFailure } from '@/lib/service
 
 // ─── Retell payload types (webhook + custom function) ───────
 
+/**
+ * Real Retell Utterance schema (get-call API): required fields are
+ * `role` (agent|user|transfer_target) + `content` + `words` — there is NO
+ * `speaker` field and NO `utterance_id` in webhook payloads. `speaker` and
+ * `utterance_id` are still accepted (chat variants / forward compatibility).
+ */
 export interface RetellUtterance {
-  speaker?: string;          // "agent" | "user"
+  role?: string;               // "agent" | "user" | "transfer_target" (production)
+  speaker?: string;            // legacy/chat variants
   content?: string;
   utterance_id?: string | number;
   language?: string;
@@ -67,7 +75,11 @@ export interface RetellCallObject {
   call_status?: string;      // registered | not_connected | ongoing | ended
   disconnection_reason?: string | null;
   transcript?: string | null;
-  transcript_object?: { utterances?: RetellUtterance[] } | RetellUtterance[] | null;
+  transcript_object?:
+    | RetellUtterance[]
+    | { utterances?: RetellUtterance[] }
+    | Record<string, RetellUtterance[]>
+    | null;
   transcript_with_tool_calls?: unknown;
   call_analysis?: RetellCallAnalysis | null;
   metadata?: Record<string, unknown> | null;
@@ -118,13 +130,72 @@ export type RetellToolArgs = z.infer<typeof retellToolArgsSchema>;
 
 // ─── Pure helpers (exported for offline unit tests) ─────────
 
-/** Normalize Retell transcript_object into a flat utterance array. */
+/** Normalize Retell transcript payloads into a flat, chronological array. */
 export function extractUtterances(call: RetellCallObject): RetellUtterance[] {
-  const t = call.transcript_object;
+  const t = call.transcript_object as unknown;
+  const list = coerceUtteranceArray(t);
+  if (list.length > 0) return list;
+  // Last resort: parse the cumulative plain-text transcript ("Agent: ...\nUser: ...").
+  return parseRawTranscript(call.transcript ?? null);
+}
+
+function isUtteranceLike(v: unknown): v is RetellUtterance {
+  return !!v && typeof v === 'object' && !Array.isArray(v)
+    && typeof (v as RetellUtterance).content === 'string';
+}
+
+function coerceUtteranceArray(t: unknown): RetellUtterance[] {
   if (!t) return [];
-  if (Array.isArray(t)) return t;
-  if (Array.isArray(t.utterances)) return t.utterances;
+  if (Array.isArray(t)) {
+    // Flat array of utterances — the documented get-call shape.
+    if (t.every((x) => !Array.isArray(x))) return t.filter(isUtteranceLike);
+    // Array of arrays: flatten, order preserved per segment.
+    return t.flatMap((x) => (Array.isArray(x) ? x.filter(isUtteranceLike) : isUtteranceLike(x) ? [x] : []));
+  }
+  if (typeof t === 'object') {
+    const obj = t as Record<string, unknown>;
+    if (Array.isArray(obj.utterances)) return obj.utterances.filter(isUtteranceLike);
+    // Map keyed by phone number / participant → merge participant tracks.
+    const tracks = Object.values(obj).filter((v) => Array.isArray(v) && v.every(isUtteranceLike)) as RetellUtterance[][];
+    if (tracks.length > 0) {
+      const merged = tracks.flat();
+      // Order participants chronologically when timestamps are available.
+      const hasTs = merged.every((u) => typeof (u as { timestamp?: unknown }).timestamp === 'number');
+      if (hasTs) {
+        return merged.sort((a, b) =>
+          ((a as { timestamp: number }).timestamp) - ((b as { timestamp: number }).timestamp));
+      }
+      return merged;
+    }
+  }
   return [];
+}
+
+/**
+ * Parse Retell's plain `transcript` string into utterances. Only the
+ * "Role: " prefix markers are consumed — utterance content is kept EXACTLY
+ * as spoken (Urdu / mixed stays byte-identical, colons inside text survive).
+ */
+export function parseRawTranscript(text: string | null): RetellUtterance[] {
+  if (!text) return [];
+  const out: RetellUtterance[] = [];
+  const re = /(^|\n)[ \t]*(agent|assistant|user|caller|bot|transfer_target)[ \t]*:[ \t]?/gi;
+  let lastRole: string | null = null;
+  let lastEnd = -1;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    if (lastRole !== null) {
+      const content = text.slice(lastEnd, m.index).replace(/\s+$/, '');
+      if (content) out.push({ role: lastRole, content });
+    }
+    lastRole = m[2].toLowerCase(); // role label only — content stays byte-exact
+    lastEnd = m.index + m[0].length;
+  }
+  if (lastRole !== null) {
+    const content = text.slice(lastEnd).replace(/\s+$/, '');
+    if (content) out.push({ role: lastRole, content });
+  }
+  return out;
 }
 
 /** Map Retell speaker roles onto our stored CALLER | AI vocabulary. */
@@ -138,7 +209,7 @@ export function normalizeSpeaker(speaker: string | undefined): 'CALLER' | 'AI' |
     case 'bot':
       return 'AI';
     default:
-      return null;
+      return null; // transfer_target / unknown — never guessed
   }
 }
 
@@ -227,31 +298,42 @@ async function ensureRetellSession(call: RetellCallObject): Promise<ResolvedRete
 // ─── Transcript persistence ─────────────────────────────────
 
 /**
- * Append utterances not yet stored. Dedup is handled by addVoiceTurn via
- * recordingReference = utterance_id (fallback: stable positional key), so
- * Retell retries and incremental transcript_updated deliveries are safe.
+ * Append utterances not yet stored. Retell's cumulative deliveries repeat
+ * every earlier utterance each time — dedup keys make re-delivery a no-op:
+ *   • `utterance_id` when present  → `ut:{id}`
+ *   • otherwise                     → `rc:{index}:{speaker}:{sha1(content)}`
+ * The positional+content hash is stable across cumulative redeliveries (same
+ * order, same text) and cannot collide with genuinely repeated phrases at a
+ * different position. Raw text is stored byte-exact — never rewritten.
  */
 export async function syncTranscriptFromCall(sessionId: string, call: RetellCallObject): Promise<number> {
   const utterances = extractUtterances(call);
+  const before = await prisma.voiceCallTurn.count({ where: { voiceCallSessionId: sessionId } });
   let added = 0;
 
   for (let i = 0; i < utterances.length; i++) {
     const u = utterances[i];
-    const speaker = normalizeSpeaker(u.speaker);
+    const speaker = normalizeSpeaker(u.role ?? u.speaker);
     const content = (u.content ?? '').trim();
     if (!speaker || !content) continue;
+
+    const ref = u.utterance_id !== undefined
+      ? `ut:${u.utterance_id}`
+      : `rc:${i}:${speaker}:${createHash('sha1').update(content, 'utf8').digest('hex').substring(0, 16)}`;
 
     await addVoiceTurn({
       sessionId,
       speaker,
-      transcript: content, // raw text — authoritative, never rewritten
-      recordingReference: u.utterance_id !== undefined ? `ut:${u.utterance_id}` : `pos:${i}`,
+      transcript: content, // raw text — authoritative, never modified
+      recordingReference: ref,
       detectedLanguage: speaker === 'CALLER' ? detectLanguageTag(content) : undefined,
     });
     added++;
   }
-
-  return added;
+  if (added === 0) return 0;
+  // Report actual inserts — cumulative redeliveries must count as zero new.
+  const after = await prisma.voiceCallTurn.count({ where: { voiceCallSessionId: sessionId } });
+  return Math.max(0, after - before);
 }
 
 // ─── Alibaba Qwen analysis (decision support — never lost) ──
@@ -264,6 +346,62 @@ async function hasPriorAiAnalysis(caseId: string): Promise<boolean> {
 }
 
 export type QwenRunStatus = 'COMPLETED' | 'FAILED' | 'SKIPPED';
+
+// ─── Analysis-input fingerprint (deterministic Qwen dedup) ───────
+
+/**
+ * Hash of ONLY the authoritative triage inputs (caller facts) — never the
+ * raw transcript, never timestamps. Stored in the existing AI_ANALYSIS_*
+ * audit row as a ` [fp:…]` marker: zero schema changes, zero migrations.
+ */
+export async function computeAnalysisFingerprint(caseId: string): Promise<string> {
+  const c = await prisma.emergencyCase.findUnique({
+    where: { id: caseId },
+    select: {
+      originalMessage: true,
+      locationText: true,
+      peopleAffected: true,
+      specialNeeds: true,
+      categories: { select: { category: true } },
+    },
+  });
+  if (!c) return 'missing-case';
+  const canonical = JSON.stringify({
+    om: c.originalMessage,
+    loc: c.locationText ?? null,
+    ppl: c.peopleAffected ?? null,
+    spn: [...c.specialNeeds].sort(),
+    cat: c.categories.map((x) => x.category).sort(),
+  });
+  return createHash('sha256').update(canonical, 'utf8').digest('hex').substring(0, 16);
+}
+
+const FP_MARKER = /\[fp:([0-9a-f]{16})\]/;
+
+async function findLastAnalysisRow(caseId: string) {
+  return prisma.caseUpdate.findFirst({
+    where: { emergencyCaseId: caseId, updateType: { in: ['AI_ANALYSIS_COMPLETED', 'AI_ANALYSIS_FAILED'] } },
+    orderBy: { createdAt: 'desc' },
+    select: { id: true, message: true },
+  });
+}
+
+/** Fingerprint of the most recent analysis run (null = never stamped). */
+export async function getLastAnalysisFingerprint(caseId: string): Promise<string | null> {
+  const row = await findLastAnalysisRow(caseId);
+  const m = row ? FP_MARKER.exec(row.message) : null;
+  return m ? m[1] : null;
+}
+
+/** Attach the fingerprint of the inputs an analysis actually consumed. */
+async function stampAnalysisFingerprint(caseId: string, fingerprint: string): Promise<void> {
+  const row = await findLastAnalysisRow(caseId);
+  if (row && !FP_MARKER.test(row.message)) {
+    await prisma.caseUpdate
+      .update({ where: { id: row.id }, data: { message: `${row.message} [fp:${fingerprint}]` } })
+      .catch(() => undefined); // stamping is metadata — never fails the pipeline
+  }
+}
 
 // Indirection so tests can substitute the Qwen call without touching the
 // network; production always uses the real Alibaba analyzer.
@@ -279,8 +417,13 @@ export function setQwenAnalyzerForTests(fn: typeof analyzeEmergency | null): voi
  * records AI_ANALYSIS_FAILED and leaves the case + raw transcript intact.
  * `force` re-analyzes even when a prior analysis exists (updated facts);
  * without it, an already-analyzed case is skipped (webhook-fallback mode).
+ * `fingerprint` (when given) is stamped onto the resulting audit row so
+ * maybeScheduleQwenAnalysis can skip unchanged facts deterministically.
  */
-export async function runQwenAnalysis(caseId: string, options: { force: boolean }): Promise<QwenRunStatus> {
+export async function runQwenAnalysis(
+  caseId: string,
+  options: { force: boolean; fingerprint?: string },
+): Promise<QwenRunStatus> {
   try {
     if (!options.force && (await hasPriorAiAnalysis(caseId))) return 'SKIPPED';
 
@@ -299,15 +442,18 @@ export async function runQwenAnalysis(caseId: string, options: { force: boolean 
 
     if (result.success && result.analysis) {
       await enrichCaseWithAiAnalysis(caseId, result.analysis);
+      await stampAnalysisFingerprint(caseId, options.fingerprint ?? (await computeAnalysisFingerprint(caseId)));
       return 'COMPLETED';
     }
     await recordAiAnalysisFailure(caseId, result.error ?? 'Unknown AI error');
+    await stampAnalysisFingerprint(caseId, options.fingerprint ?? (await computeAnalysisFingerprint(caseId)));
     return 'FAILED';
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error';
     console.error(`[Retell] Qwen analysis pipeline error for case ${caseId}: ${msg.substring(0, 200)}`);
     try {
       await recordAiAnalysisFailure(caseId, msg);
+      await stampAnalysisFingerprint(caseId, options.fingerprint ?? (await computeAnalysisFingerprint(caseId)));
     } catch {
       /* audit write failed — case + transcript remain, operator review still possible */
     }
@@ -317,24 +463,41 @@ export async function runQwenAnalysis(caseId: string, options: { force: boolean 
 
 /** Fire-and-forget wrapper used from webhook handlers (Retell 10s timeout). */
 function detachQwenFallback(caseId: string): void {
-  void runQwenAnalysis(caseId, { force: false }).catch(() => undefined);
+  maybeScheduleQwenAnalysis(caseId);
 }
 
 // Cases with Qwen analysis currently in flight (single-process best-effort
-// guard so repeated update_case calls cannot pile up parallel analyses).
+// guard so repeated Retell events cannot pile up parallel analyses).
 const qwenInFlight = new Set<string>();
+// Facts changed while a run was in flight → re-check once it finishes.
+const qwenRerunQueued = new Set<string>();
 
 /**
- * Schedule a detached (force) Qwen analysis for a case. Returns immediately —
- * the voice-critical response path NEVER awaits AI. Failures are contained
- * inside runQwenAnalysis (case + raw transcript always survive).
+ * DETACHED, fingerprint-deduped Qwen scheduling — the voice path never awaits
+ * it, and identical facts never trigger a second analysis:
+ *   1. compute the current authoritative-input fingerprint
+ *   2. unchanged vs the last analysis → zero AI calls
+ *   3. changed (or never analyzed)    → exactly one analysis run
+ *   4. change arriving mid-run        → one re-check afterwards
  */
-export function scheduleQwenAnalysis(caseId: string): void {
-  if (!caseId || qwenInFlight.has(caseId)) return;
+export function maybeScheduleQwenAnalysis(caseId: string): void {
+  if (!caseId) return;
+  if (qwenInFlight.has(caseId)) {
+    qwenRerunQueued.add(caseId);
+    return;
+  }
   qwenInFlight.add(caseId);
-  void runQwenAnalysis(caseId, { force: true })
+  void (async () => {
+    const fp = await computeAnalysisFingerprint(caseId);
+    const last = await getLastAnalysisFingerprint(caseId);
+    if (last === fp) return; // unchanged — no analysis, no AI request
+    await runQwenAnalysis(caseId, { force: true, fingerprint: fp });
+  })()
     .catch(() => undefined)
-    .finally(() => qwenInFlight.delete(caseId));
+    .finally(() => {
+      qwenInFlight.delete(caseId);
+      if (qwenRerunQueued.delete(caseId)) maybeScheduleQwenAnalysis(caseId);
+    });
 }
 
 // ─── Real-assignment lookup (no-false-dispatch source of truth) ─
@@ -544,9 +707,9 @@ export async function handleRetellToolCall(
     assignmentSummary,
   });
 
-  // CAPTURE DONE → schedule async Qwen (best-effort, deduped in-process) and
-  // return immediately. A slow/failing Qwen can never delay or break this call.
-  scheduleQwenAnalysis(caseId);
+  // CAPTURE DONE → fingerprint-deduped async Qwen scheduling and immediate
+  // return. A slow/failing Qwen can never delay or break this call.
+  maybeScheduleQwenAnalysis(caseId);
 
   return {
     ok: true,

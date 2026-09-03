@@ -26,6 +26,7 @@ import {
 import {
   normalizeSpeaker,
   extractUtterances,
+  parseRawTranscript,
   detectLanguageTag,
   isNormalRetellDisconnect,
   buildToolAgentMessage,
@@ -35,6 +36,8 @@ import {
   handleRetellToolCall,
   runQwenAnalysis,
   setQwenAnalyzerForTests,
+  maybeScheduleQwenAnalysis,
+  computeAnalysisFingerprint,
   type RetellCallObject,
 } from '../src/lib/voice/retellService';
 import { getSessionByCallSid } from '../src/lib/voice/voiceService';
@@ -92,17 +95,32 @@ section('A1. Webhook signature validation');
   );
 }
 
-section('A2. Speaker + utterance normalization');
+section('A2. Speaker + utterance normalization (real Retell role shape + legacy shapes)');
 {
   assert(normalizeSpeaker('user') === 'CALLER', 'user → CALLER');
   assert(normalizeSpeaker('agent') === 'AI', 'agent → AI');
   assert(normalizeSpeaker('Agent') === 'AI', 'case-insensitive agent');
   assert(normalizeSpeaker('system') === null, 'unknown speaker ignored');
+  assert(normalizeSpeaker('transfer_target') === null, 'transfer_target never guessed into CALLER/AI');
+
+  // Production get-call shape: flat array of { role, content, words } — NO speaker/utterance_id fields.
+  const roleArray = extractUtterances({ call_id: 'x', transcript_object: [{ role: 'user', content: 'a' }, { role: 'agent', content: 'b' }] });
+  assert(roleArray.length === 2 && roleArray[0].role === 'user', 'role-array shape extracted');
 
   const wrapped = extractUtterances({ call_id: 'x', transcript_object: { utterances: [{ speaker: 'user', content: 'a' }] } });
   const flat = extractUtterances({ call_id: 'x', transcript_object: [{ speaker: 'user', content: 'a' }] });
   const none = extractUtterances({ call_id: 'x' });
-  assert(wrapped.length === 1 && flat.length === 1 && none.length === 0, 'transcript_object accepted in both shapes');
+  assert(wrapped.length === 1 && flat.length === 1 && none.length === 0, 'legacy utterances/array shapes still accepted');
+
+  const participantMap = extractUtterances({ call_id: 'x', transcript_object: { '+92300A': [{ role: 'user', content: 'a' }], '+92300B': [{ role: 'agent', content: 'b' }] } });
+  assert(participantMap.length === 2, 'participant-map transcript flattened');
+
+  // Plain-text fallback keeps internal colons byte-exact.
+  const raw = parseRawTranscript('Agent: hello\nUser: meri location: Gulshan 12: help');
+  assert(raw.length === 2 && raw[1].content === 'meri location: Gulshan 12: help' && raw[1].role === 'user', 'raw transcript parsed with content preserved exactly');
+  assert(parseRawTranscript(null).length === 0, 'null transcript → no turns');
+  const viaFallback = extractUtterances({ call_id: 'x', transcript: 'Agent: hi\nUser: مدد', transcript_object: null });
+  assert(viaFallback.length === 2 && viaFallback[1].content === 'مدد', 'missing transcript_object falls back to raw transcript');
 }
 
 section('A3. Urdu / English / mixed language tagging (raw text never modified)');
@@ -225,37 +243,51 @@ try {
     assert(sessions === 1, 'retried call_started did NOT duplicate the session');
   }
 
-  section('B3. Transcript persistence + Urdu/English/mixed + retry dedup');
+  section('B3. Transcript persistence — production role shape, retry + cumulative dedup');
   {
-    const transcriptCall = callObject({
-      call_id: R1,
-      transcript_object: {
-        utterances: [
-          { utterance_id: 'u1', speaker: 'agent', content: 'Assalam-o-Alaikum, KhidmatConnect AI Emergency Assistant.' },
-          { utterance_id: 'u2', speaker: 'user', content: urduTurn },
-          { utterance_id: 'u3', speaker: 'agent', content: 'Main samajh gaya.' },
-          { utterance_id: 'u4', speaker: 'user', content: englishTurn },
-          { utterance_id: 'u5', speaker: 'user', content: mixedTurn },
-        ],
-      },
-    });
+    // EXACT production shape (get-call Utterance): flat array, role+content, no utterance_id.
+    const utterances = [
+      { role: 'agent', content: 'Assalam-o-Alaikum, KhidmatConnect AI Emergency Assistant.' },
+      { role: 'user', content: urduTurn },
+      { role: 'agent', content: 'Main samajh gaya.' },
+      { role: 'user', content: englishTurn },
+      { role: 'user', content: mixedTurn },
+    ];
+    const transcriptCall = callObject({ call_id: R1, transcript_object: utterances });
     await handleRetellWebhook('transcript_updated', transcriptCall);
     let turns = await prisma.voiceCallTurn.findMany({ where: { session: { providerCallSid: R1 } }, orderBy: { createdAt: 'asc' } });
-    assert(turns.length === 5, `5 turns persisted (got ${turns.length})`);
+    assert(turns.length === 5, `5 role-based turns persisted (got ${turns.length})`);
 
-    // Duplicate delivery of the same payload → no new rows (utterance_id dedup)
+    // Duplicate delivery of the same payload → no new rows.
     await handleRetellWebhook('transcript_updated', transcriptCall);
-    turns = await prisma.voiceCallTurn.findMany({ where: { session: { providerCallSid: R1 } } });
+    turns = await prisma.voiceCallTurn.findMany({ where: { session: { providerCallSid: R1 } }, orderBy: { createdAt: 'asc' } });
     assert(turns.length === 5, `retried transcript_updated did NOT duplicate turns (got ${turns.length})`);
+
+    // CUMULATIVE delivery: all 5 old + 2 new → only the 2 new ones are added,
+    // order preserved (requirement: cumulative must not duplicate history).
+    const newUrdu = 'ہم تین افراد ہیں، بچاؤ';
+    await handleRetellWebhook('transcript_updated', callObject({
+      call_id: R1,
+      transcript_object: [
+        ...utterances,
+        { role: 'user', content: newUrdu },
+        { role: 'agent', content: 'Shukriya. Aap line par rahein.' },
+      ],
+    }));
+    turns = await prisma.voiceCallTurn.findMany({ where: { session: { providerCallSid: R1 } }, orderBy: { createdAt: 'asc' } });
+    assert(turns.length === 7, `cumulative delivery added exactly 2 new turns (got ${turns.length})`);
+    assert(turns[1].transcript === urduTurn && turns[5].transcript === newUrdu, 'utterance order preserved across cumulative redelivery');
 
     const callerUrdu = turns.find((t) => t.transcript === urduTurn);
     const callerMixed = turns.find((t) => t.transcript === mixedTurn);
+    assert(callerUrdu?.speaker === 'CALLER', 'role user → speaker CALLER');
+    assert(turns[0].speaker === 'AI', 'role agent → speaker AI');
     assert(callerUrdu?.detectedLanguage === 'ur', 'Urdu turn tagged ur');
     assert(callerMixed?.detectedLanguage === 'ur-en', 'Mixed turn tagged ur-en (raw text preserved verbatim)');
     assert(callerUrdu?.transcript === urduTurn, 'raw Urdu text stored unchanged (authoritative)');
 
     const sess = await getSessionByCallSid(R1);
-    assert((sess?.turnCount ?? 0) === 5, 'session turnCount advanced to 5');
+    assert((sess?.turnCount ?? 0) === 7, `session turnCount advanced to 7 (got ${sess?.turnCount})`);
     const caseT = await prisma.emergencyCase.findUnique({ where: { id: sess!.emergencyCaseId! } });
     assert((caseT?.transcript ?? '').includes(urduTurn), 'cumulative transcript on the case');
   }
@@ -355,12 +387,63 @@ try {
     assert(skipped === 'SKIPPED', 'non-forced rerun skips (analysis already recorded)');
   }
 
+  section('B5b. Qwen fingerprint dedup — unchanged facts never re-analyze');
+  {
+    const sess = await getSessionByCallSid(R1);
+    const caseId = sess!.emergencyCaseId!;
+    let runs = 0;
+    setQwenAnalyzerForTests(async () => {
+      runs++;
+      return { success: false, analysis: null, error: 'mock dedup run', model: 'mock' };
+    });
+
+    // B5 stamped the CURRENT facts → scheduling with nothing changed = zero AI calls.
+    maybeScheduleQwenAnalysis(caseId);
+    maybeScheduleQwenAnalysis(caseId);
+    await new Promise((r) => setTimeout(r, 300));
+    assert(runs === 0, `unchanged facts scheduled ZERO analyses (runs=${runs})`);
+
+    // Materially new caller fact via tool → exactly ONE new analysis.
+    const fpBefore = await computeAnalysisFingerprint(caseId);
+    await handleRetellToolCall(callObject({ call_id: R1 }), retellToolArgsSchema.parse({ people_affected: 5 }));
+    await new Promise((r) => setTimeout(r, 400));
+    assert(runs === 1, `materially new fact scheduled exactly one analysis (runs=${runs})`);
+    const fpAfter = await computeAnalysisFingerprint(caseId);
+    assert(fpBefore !== fpAfter, 'fingerprint changes when authoritative facts change');
+
+    // Duplicate delivery of that SAME new fact → no additional run.
+    await handleRetellToolCall(callObject({ call_id: R1 }), retellToolArgsSchema.parse({ people_affected: 5 }));
+    await new Promise((r) => setTimeout(r, 400));
+    assert(runs === 1, `duplicate new-fact delivery added no analysis (runs=${runs})`);
+
+    // Transcript webhook (not a triage input) → no additional run.
+    await handleRetellWebhook('transcript_updated', callObject({
+      call_id: R1,
+      transcript_object: [{ role: 'user', content: 'barish ka paani ghutno tak hai' }],
+    }));
+    await new Promise((r) => setTimeout(r, 300));
+    assert(runs === 1, `transcript webhook scheduled no analysis (runs=${runs})`);
+
+    setQwenAnalyzerForTests(null);
+  }
+
   section('B6. Abnormal disconnect preserves partial emergency + flags review');
   {
-    await handleRetellWebhook('call_ended', callObject({ call_id: R1, call_status: 'ended', disconnection_reason: 'voicemail_detected' }));
+    const turnsBefore = await prisma.voiceCallTurn.count({ where: { session: { providerCallSid: R1 } } });
+    // call_ended carries the FULL cumulative transcript again — must not erase
+    // or duplicate turns.
+    await handleRetellWebhook('call_ended', callObject({
+      call_id: R1,
+      call_status: 'ended',
+      disconnection_reason: 'voicemail_detected',
+      transcript_object: [{ role: 'user', content: 'barish ka paani ghutno tak hai' }],
+    }));
+    const turnsAfter = await prisma.voiceCallTurn.count({ where: { session: { providerCallSid: R1 } } });
+    assert(turnsAfter === turnsBefore, `call_ended redelivery preserved turn count (${turnsBefore} → ${turnsAfter})`);
     const sess = await prisma.voiceCallSession.findUnique({ where: { providerCallSid: R1 } });
     assert(sess?.status === 'DISCONNECTED', 'session DISCONNECTED on abnormal end');
     assert(sess?.humanReviewRequired === true, 'human review flagged (no silent loss)');
+    assert(sess?.turnCount === turnsAfter, `completed-session turn count matches rows (${sess?.turnCount} = ${turnsAfter})`);
     const c = await prisma.emergencyCase.findUnique({ where: { id: sess!.emergencyCaseId! } });
     assert(!!c?.transcript?.length, 'partial transcript preserved after drop');
 
