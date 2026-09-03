@@ -29,7 +29,7 @@ now marked LEGACY PROTOTYPE. Retell replaces it only at the conversation layer.
 | Webhooks are HMAC-SHA256 signed: header `X-Retell-Signature: v={ts_ms},d={hex}`, digest = HMAC(rawBody + ts, **the API key that has the webhook badge**) | We verify with our `RETELL_API_KEY`; there is **no separate webhook secret** env var in Retell |
 | Webhook timeout 10 s, up to 3 retries | Endpoints persist fast and return 2xx; Qwen enrichment runs as a detached async job; dedup via unique `call_id` |
 | **Custom Functions**: Retell POSTs `{ name, call, args }` synchronously to our public HTTPS URL during the call (timeout configurable 1–600 s, same `X-Retell-Signature`) | Mid-call tool `/api/voice/retell/update-case`; responds in <2s — facts persisted synchronously, Qwen analysis detached |
-| Call object carries `transcript_object` (utterances), `transcript`, `disconnection_reason`, `call_analysis` after analysis | Transcript persistence reads `transcript_object`; per-utterance `utterance_id` maps onto existing `VoiceCallTurn.recordingReference` dedup |
+| Call object carries `transcript_object` (**flat array of `{role, content, words}` — real Utterance schema has NO `speaker` and NO `utterance_id`**), `transcript` (plain text), `disconnection_reason`, `call_analysis` after analysis | Transcript persistence accepts role/speaker + array/map/raw-text shapes; dedup key = `ut:{utterance_id}` when present, else stable `rc:{position}:{speaker}:{sha1(content)}` |
 | Retell-managed number purchase is **US/CA only**; Pakistan numbers require BYO telephony (elastic SIP trunk / `POST /import-phone-number`) | Phone-number cutover is a LATER ops step (out of scope now, per instructions). Demo/testing uses Retell dashboard/test calling |
 | Urdu (`ur-IN`) supported for ASR via Azure/Soniox and TTS via ElevenLabs(`eleven_v3`)/OpenAI/Fish; code-switching via Soniox | Agent console config listed in §8; no code change needed for multilingual — we store raw text verbatim |
 | `Authorization: Bearer <RETELL_API_KEY>` for REST; API key doubles as webhook HMAC secret | One new required env var |
@@ -48,7 +48,7 @@ Caller dials hotline (Retell telephony / SIP-imported number)
        │         ("Phone emergency call in progress", status NEW)  ← CAPTURE FIRST
        │
        ├─ transcript_updated webhook (per turn + final)
-       │     • sync new utterances → VoiceCallTurn (dedup on utterance_id)
+       │     • sync new utterances → VoiceCallTurn (position+speaker+content-hash dedup key)
        │     • cumulative transcript → session.transcriptText + case.transcript
        │     • detected language per caller turn (ur / en / ur-en) — raw text untouched
        │
@@ -82,7 +82,7 @@ Case appears in existing operator queue (/operator, /api/operator/voice-calls)
 | Reused | Where | Role for Retell |
 |---|---|---|
 | `createVoiceSession()` | `src/lib/voice/voiceService.ts` | capture-first provisional case + session; idempotent on `providerCallSid` (unique). +1 optional field `provider` |
-| `addVoiceTurn()` | same | per-utterance persistence; already dedups on `recordingReference` ← `utterance_id` |
+| `addVoiceTurn()` | same | per-utterance persistence; already dedups on `recordingReference` ← stable per-utterance dedup key |
 | `transitionVoiceSession()`, `handleCallDisconnect()` | same | end-state machine, human-review flagging |
 | `getSessionByCallSid()` | same | correlation by Retell `call_id` |
 | `analyzeEmergency()` + `enrichCaseWithAiAnalysis()` + `recordAiAnalysisFailure()` | `src/lib/ai/*`, `src/lib/services/emergencyCaseService.ts` | Alibaba Qwen structured analysis — unchanged |
@@ -134,6 +134,9 @@ the cPanel PostgreSQL instance (which already has operational migration constrai
 5. Webhook URL (agent-level `webhook_url` or account System Settings):
    `https://khidmatconnect.teqprotech.com/api/voice/retell/webhook`,
    `webhook_events`: `call_started`, `transcript_updated`, `call_ended`, `call_analyzed`.
+   ⚠ `transcript_updated` is NOT in Retell's default event set (defaults: started/
+   ended/analyzed) — it must be selected explicitly or live transcripts only arrive
+   with `call_ended`.
 6. Telephony: Pakistan hotline via elastic SIP trunk + number import — DEFERRED (no live
    number changes in this milestone; use Retell test calling only).
 
@@ -168,6 +171,7 @@ the cPanel PostgreSQL instance (which already has operational migration constrai
 |---|---|
 | `call_started` webhook lost | `update_case` / `call_ended` handlers lazily create session+case (correlated by `call_id`) |
 | Duplicate webhook (retry) | unique `providerCallSid` + turn `recordingReference` dedup + terminal-state checks → no-op |
+| Same facts re-sent (tool repeats, cumulative events) | Qwen run stamped ` [fp:…]` (sha256 over authoritative triage inputs) inside the existing AI_ANALYSIS_* audit row → unchanged fingerprint = zero new AI calls |
 | Qwen down/timeout | case keeps raw transcript; `AI_ANALYSIS_FAILED` audit; `humanReviewRequired` on disconnect; operator still sees full raw content |
 | Call drops mid-sentence | provisional case + partial transcript persist; DISCONNECTED + review flag |
 | Our endpoint 5xx | Retell retries webhooks (≤3, idempotent); custom function not retried → agent apologizes, case already captured |
