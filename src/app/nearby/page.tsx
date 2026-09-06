@@ -9,7 +9,15 @@ import type { ReliefResource, ResourceType } from '@/types';
 import InteractiveMap from '@/components/InteractiveMap';
 import GoogleMap from '@/components/maps/GoogleMap';
 import MobileBottomNav from '@/components/MobileBottomNav';
-import { getCurrentPosition } from '@/lib/maps/geolocation';
+import { getCurrentPosition, probePermissionState } from '@/lib/maps/geolocation';
+import {
+  gpsButtonLabel,
+  gpsHelpMessage,
+  shouldOfferGpsRetry,
+  toGpsUiState,
+  type GpsCopy,
+  type GpsUiState,
+} from '@/lib/maps/geolocationUi';
 import { haversineDistance, formatDistance } from '@/lib/maps/distance';
 import { isGoogleMapsConfigured } from '@/lib/maps/googleMapsLoader';
 import type { GeoPoint, MapMarkerData } from '@/lib/maps/types';
@@ -28,13 +36,14 @@ import {
   Navigation,
   X,
   CheckCircle2,
+  Loader2,
   Globe,
   Shield,
   PhoneCall,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
-type LocationState = 'detected' | 'manual' | 'unavailable' | 'detecting';
+type LocationState = GpsUiState;
 
 export default function NearbyPage() {
   const { lang, isUrdu, toggleLang } = useLanguage();
@@ -44,22 +53,46 @@ export default function NearbyPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [viewMode, setViewMode] = useState<'list' | 'map'>('list');
   const [selectedResource, setSelectedResource] = useState<ReliefResource | null>(null);
-  const [locationState, setLocationState] = useState<LocationState>('detecting');
+  const [locationState, setLocationState] = useState<LocationState>('default');
   const [userLocation, setUserLocation] = useState<GeoPoint | null>(null);
   const [useGoogleMap, setUseGoogleMap] = useState(false);
 
-  // Detect user location on mount
+  // Copy for the location control. Reuses the shared GPS state mapping so the
+  // wording stays identical to the emergency screen.
+  const gpsCopy: GpsCopy = {
+    defaultLabel: t.nearbyDetectButton,
+    loadingLabel: t.nearbyDetectDetecting,
+    successLabel: t.nearbyLocationDetected,
+    blocked: t.nearbyDetectBlocked,
+    unavailable: t.nearbyLocationUnavailable,
+    timeout: t.nearbyLocationUnavailable,
+    unsupported: t.nearbyLocationUnavailable,
+    insecure: t.gpsInsecureHelp,
+    tryAgain: t.tryAgain,
+  };
+
+  // No geolocation on load - only whether the map component can be used, plus a
+  // read-only probe of the stored permission (never prompts, never locates).
   useEffect(() => {
     setUseGoogleMap(isGoogleMapsConfigured());
-    getCurrentPosition().then((result) => {
-      if (result.status === 'SUCCESS' && result.latitude != null && result.longitude != null) {
-        setUserLocation({ latitude: result.latitude, longitude: result.longitude });
-        setLocationState('detected');
-      } else {
-        setLocationState('unavailable');
-      }
-    });
+    void probePermissionState();
   }, []);
+
+  // The ONLY place this page can reach the Geolocation API: a user click.
+  const handleDetectLocation = async (force = false) => {
+    setLocationState('loading');
+    const result = await getCurrentPosition(force ? { force: true } : {});
+
+    if (result.status === 'SUCCESS' && result.latitude != null && result.longitude != null) {
+      setUserLocation({ latitude: result.latitude, longitude: result.longitude });
+      setLocationState('success');
+      return;
+    }
+
+    // Distances fall back to the published demo anchor; the page stays usable.
+    setUserLocation(null);
+    setLocationState(toGpsUiState(result.status));
+  };
 
   const filterTabs: { id: string; label: string; icon: typeof Compass }[] = [
     { id: 'all', label: t.nearbyFilterAll, icon: Compass },
@@ -108,12 +141,19 @@ export default function NearbyPage() {
     available: r.availability === 'available',
   }));
 
-  const locationLabel = {
-    detected: t.nearbyLocationDetected,
-    manual: t.nearbyLocationManual,
-    unavailable: t.nearbyLocationUnavailable,
-    detecting: lang === 'ur' ? 'مقام کا پتہ لگایا جا رہا ہے...' : 'Detecting location...',
-  };
+  // One short status line under the button; the detailed explanation, when a
+  // detection failed, is rendered separately below it.
+  const locationFailureMessage = gpsHelpMessage(locationState, gpsCopy);
+  const locationChip =
+    locationState === 'default'
+      ? t.nearbyDetectPrompt
+      : locationState === 'blocked'
+        ? t.sharingStatusBlocked
+        : locationState === 'insecure'
+          ? t.gpsInsecureHelp
+          : locationFailureMessage
+            ? t.nearbyLocationUnavailable
+            : gpsButtonLabel(locationState, gpsCopy);
 
   const availabilityColor = (a: string) => {
     if (a === 'available') return 'text-[#3FB950] bg-[#3FB950]/10 border-[#3FB950]/20';
@@ -190,11 +230,56 @@ export default function NearbyPage() {
       </div>
 
       <main className="mx-auto max-w-5xl px-4 py-4">
-        {/* Location Status */}
-        <div className="mb-3 flex items-center gap-2 rounded-xl border border-[#21262D] bg-[#11151C] px-3 py-2.5">
-          <MapPin className={`h-4 w-4 shrink-0 ${locationState === 'detected' ? 'text-[#3FB950]' : 'text-[#D29922]'}`} />
-          <span className="text-xs font-medium text-[#E6EDF3]">{locationLabel[locationState]}</span>
-          <span className="text-[10px] text-[#6E7681] ms-auto">— {t.nearbyDemoLocation}</span>
+        {/* Location status - GPS is only touched by the button below. */}
+        <div className="mb-3 rounded-xl border border-[#21262D] bg-[#11151C] px-3 py-2.5">
+          <div className="flex flex-wrap items-center gap-2">
+            <MapPin
+              className={`h-4 w-4 shrink-0 ${
+                locationState === 'success'
+                  ? 'text-[#3FB950]'
+                  : locationState === 'default'
+                  ? 'text-[#8B949E]'
+                  : 'text-[#D29922]'
+              }`}
+            />
+            <span className="text-xs font-medium text-[#E6EDF3]">{locationChip}</span>
+            {/* Distances without a detected position are measured from the published
+                demo anchor - say so instead of implying live GPS. */}
+            {!userLocation && locationState !== 'loading' && (
+              <span className="text-[10px] text-[#6E7681]">— {t.nearbyDemoLocation}</span>
+            )}
+            <button
+              type="button"
+              onClick={() => handleDetectLocation(false)}
+              disabled={locationState === 'loading'}
+              className="ms-auto flex items-center gap-1.5 rounded-lg border border-[#21262D] bg-[#1A1F2B] px-2.5 py-1.5 text-[11px] font-semibold text-[#E6EDF3] transition-colors hover:border-[#3FB950]/40 min-h-[32px] disabled:opacity-60"
+            >
+              {locationState === 'loading' ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : locationState === 'success' ? (
+                <CheckCircle2 className="h-3.5 w-3.5 text-[#3FB950]" />
+              ) : (
+                <Navigation className="h-3.5 w-3.5 text-[#58A6FF]" />
+              )}
+              <span>
+                {locationState === 'success' ? gpsButtonLabel('default', gpsCopy) : gpsButtonLabel(locationState, gpsCopy)}
+              </span>
+            </button>
+          </div>
+          {locationFailureMessage && (
+            <p className="mt-1.5 text-[11px] leading-relaxed text-[#D29922]" role="status">
+              {locationFailureMessage}
+            </p>
+          )}
+          {shouldOfferGpsRetry(locationState) && (
+            <button
+              type="button"
+              onClick={() => handleDetectLocation(true)}
+              className="mt-1.5 rounded-lg border border-[#30363D] px-2.5 py-1 text-[11px] font-semibold text-[#8B949E] transition-colors hover:border-[#3FB950]/40 hover:text-[#E6EDF3]"
+            >
+              {gpsCopy.tryAgain}
+            </button>
+          )}
         </div>
 
         {/* Search Bar */}

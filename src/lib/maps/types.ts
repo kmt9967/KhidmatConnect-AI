@@ -15,7 +15,18 @@ export type GeolocationStatus =
   | 'DENIED'
   | 'UNAVAILABLE'
   | 'TIMEOUT'
-  | 'UNSUPPORTED';
+  | 'UNSUPPORTED'
+  /** HTTPS is required by the browser Geolocation API. Distinct from DENIED so
+   *  the UI never tells a user to "enable permission" when the real problem is
+   *  an insecure origin. */
+  | 'INSECURE';
+
+/**
+ * `unknown` means the origin has no stored decision we know about (the
+ * Permissions API is unavailable or has not been probed yet) - it is NOT the
+ * same as `denied`, and callers must never skip a request because of it.
+ */
+export type GeolocationPermissionState = 'granted' | 'prompt' | 'denied' | 'unknown';
 
 export interface GeolocationResult {
   status: GeolocationStatus;
@@ -23,6 +34,20 @@ export interface GeolocationResult {
   longitude?: number;
   accuracy?: number;
   error?: string;
+  /** Permission state observed at the moment this result was produced. */
+  permissionState?: GeolocationPermissionState;
+  /** True when we returned DENIED from the cached permission state WITHOUT
+   *  calling navigator.geolocation - the anti-spam guard. */
+  suppressedApiCall?: boolean;
+}
+
+// ─── A single observed device position (watchPosition output) ───
+export interface GeoFix {
+  latitude: number;
+  longitude: number;
+  accuracy?: number;
+  /** Epoch ms of the fix, from the GeolocationPosition timestamp when present. */
+  timestamp: number;
 }
 
 // ─── Geocode result (forward or reverse) ────────────────────

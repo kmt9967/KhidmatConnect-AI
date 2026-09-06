@@ -5,6 +5,7 @@ import { useLanguage } from '@/i18n/LanguageContext';
 import { getTranslation } from '@/i18n/translations';
 import Navigation from '@/components/Navigation';
 import MobileBottomNav from '@/components/MobileBottomNav';
+import AppSplash from '@/components/AppSplash';
 import {
   AlertTriangle,
   MapPin,
@@ -24,6 +25,9 @@ export default function HomePage() {
 
   return (
     <div dir={isUrdu ? 'rtl' : 'ltr'} className="min-h-screen bg-[#0B0E14]">
+      {/* Mobile/tablet branded opening (homepage only, ~1.5s, tap to skip). */}
+      <AppSplash />
+
       <Navigation />
 
       <main className="pb-20 md:pb-0">
@@ -34,7 +38,9 @@ export default function HomePage() {
           <div className="absolute inset-0 bg-dot-pattern opacity-40" />
 
           {/* Active case banner */}
-          <div className="relative mx-auto max-w-7xl px-4 pt-8 sm:px-6 lg:px-8">
+          {/* pb clears the dot-pattern edge below the zero-friction line: 20px on
+              mobile, 32px on desktop, without stretching the hero. */}
+          <div className="relative mx-auto max-w-7xl px-4 pt-8 pb-5 sm:px-6 md:pb-8 lg:px-8">
             <motion.div
               initial={{ opacity: 0, y: -8 }}
               animate={{ opacity: 1, y: 0 }}

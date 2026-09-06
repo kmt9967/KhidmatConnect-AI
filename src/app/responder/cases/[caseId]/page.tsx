@@ -1,14 +1,17 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useLanguage } from '@/i18n/LanguageContext';
+import { getTranslation } from '@/i18n/translations';
 import { useAuth } from '@/lib/auth/AuthContext';
 import AuthGuard from '@/components/AuthGuard';
 import GoogleMap from '@/components/maps/GoogleMap';
 import { isGoogleMapsConfigured } from '@/lib/maps/googleMapsLoader';
-import { getCurrentPosition } from '@/lib/maps/geolocation';
+import { probePermissionState } from '@/lib/maps/geolocation';
+import { PositionTracker } from '@/lib/maps/positionTracker';
+import type { LocationSharingStatus } from '@/lib/maps/geolocationUi';
 import type { MapMarkerData, GeoPoint } from '@/lib/maps/types';
 import {
   ArrowLeft,
@@ -89,6 +92,9 @@ const CASE_STATUS_LABELS: Record<string, string> = {
   CLOSED: 'Closed',
 };
 
+/** How often the last watched position is pushed to the backend. */
+const LOCATION_REPORT_INTERVAL_MS = 15_000;
+
 function formatTime(dateStr: string) {
   return new Date(dateStr).toLocaleTimeString('en-PK', { hour: '2-digit', minute: '2-digit' });
 }
@@ -103,7 +109,8 @@ function formatDate(dateStr: string) {
 export default function ResponderCaseDetailPage() {
   const { caseId } = useParams<{ caseId: string }>();
   const router = useRouter();
-  const { isUrdu, toggleLang } = useLanguage();
+  const { lang, isUrdu, toggleLang } = useLanguage();
+  const t = getTranslation(lang);
   const { user, logout } = useAuth();
 
   const [data, setData] = useState<ResponderCaseDetail | null>(null);
@@ -113,7 +120,54 @@ export default function ResponderCaseDetailPage() {
   const [toast, setToast] = useState<string | null>(null);
   const [gpsStatus, setGpsStatus] = useState<'unknown' | 'available' | 'denied' | 'unavailable'>('unknown');
   const [responderLocation, setResponderLocation] = useState<GeoPoint | null>(null);
-  const [locationSharing, setLocationSharing] = useState(false);
+  const [locationSharingStatus, setLocationSharingStatus] = useState<LocationSharingStatus>('off');
+  // Only a deliberate action on this screen may raise it - never the 10s poll.
+  const [sharingRequested, setSharingRequested] = useState(false);
+
+  // A single watcher for the whole screen, held in a ref: the poll replaces
+  // `data` with a new object every 10 seconds, and that must not be able to
+  // open a second subscription or re-ask the browser for permission.
+  const trackerRef = useRef<PositionTracker | null>(null);
+  if (!trackerRef.current) {
+    trackerRef.current = new PositionTracker({
+      onFix: (fix) => {
+        setResponderLocation({ latitude: fix.latitude, longitude: fix.longitude });
+        setGpsStatus('available');
+        setLocationSharingStatus('active');
+      },
+      onError: (result) => {
+        if (result.status === 'DENIED') {
+          setLocationSharingStatus('blocked');
+          setGpsStatus('denied');
+        } else {
+          setLocationSharingStatus('error');
+          setGpsStatus('unavailable');
+        }
+      },
+      // Lost signal is re-armed by the tracker on a bounded backoff, so the
+      // panel says "reconnecting" instead of pretending tracking is still live.
+      onReconnect: () => setLocationSharingStatus('retrying'),
+    });
+  }
+
+  // Assignment id as a PRIMITIVE, and only while the response is still open, so
+  // completion tears the subscription down without re-running on every poll.
+  const trackedAssignmentId =
+    data && data.assignmentStatus !== 'COMPLETED' && !['COMPLETED', 'CLOSED'].includes(data.caseStatus)
+      ? data.assignmentId
+      : null;
+
+  // Must be called synchronously from a click handler, before any await.
+  const startLocationSharing = (force = false) => {
+    setSharingRequested(true);
+    setLocationSharingStatus('starting');
+    trackerRef.current?.start({ force });
+  };
+  const stopLocationSharing = () => {
+    setSharingRequested(false);
+    trackerRef.current?.stop();
+    setLocationSharingStatus('off');
+  };
 
   // ─── Fetch case detail ──────────────────────────────────
   const fetchCase = useCallback(async () => {
@@ -142,6 +196,12 @@ export default function ResponderCaseDetailPage() {
 
   useEffect(() => { fetchCase(); }, [fetchCase]);
 
+  useEffect(() => {
+    // Read-only probe of the STORED permission so a blocked browser can be
+    // explained without ever spending a prompt. No geolocation on mount.
+    void probePermissionState();
+  }, []);
+
   // Poll for active cases
   useEffect(() => {
     if (!data) return;
@@ -151,43 +211,44 @@ export default function ResponderCaseDetailPage() {
     return () => clearInterval(interval);
   }, [data, fetchCase]);
 
-  // ─── GPS tracking ────────────────────────────────────────
+  // ─── Live location reporting ───────────────────────────
+  // Keyed on PRIMITIVES only. This effect never calls navigator.geolocation;
+  // it forwards whatever the single user-started watcher last observed.
   useEffect(() => {
-    if (!data || data.assignmentStatus === 'COMPLETED') return;
-
-    async function updateLocation() {
-      try {
-        const result = await getCurrentPosition();
-        if (result.status === 'SUCCESS' && result.latitude != null && result.longitude != null) {
-          setResponderLocation({ latitude: result.latitude, longitude: result.longitude });
-          setGpsStatus('available');
-          setLocationSharing(true);
-          // Send to backend
-          await fetch('/api/responder/location', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              assignmentId: data!.assignmentId,
-              latitude: result.latitude,
-              longitude: result.longitude,
-              accuracy: result.accuracy ?? undefined,
-            }),
-          });
-        } else if (result.status === 'DENIED') {
-          setGpsStatus('denied');
-          setLocationSharing(false);
-        } else {
-          setGpsStatus('unavailable');
-        }
-      } catch {
-        setLocationSharing(false);
-      }
+    if (!sharingRequested || trackedAssignmentId === null) {
+      trackerRef.current?.stop();
+      setLocationSharingStatus((prev) => (prev === 'blocked' ? prev : 'off'));
+      return;
     }
 
-    updateLocation();
-    const interval = setInterval(updateLocation, 15000);
+    // Idempotent + gated: keeps the click's intent alive across polls without
+    // ever opening a second watcher or re-prompting a known-denied permission.
+    trackerRef.current?.start();
+
+    const report = () => {
+      const fix = trackerRef.current?.consumeNewFix();
+      if (!fix) return;
+      fetch('/api/responder/location', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          assignmentId: trackedAssignmentId,
+          latitude: fix.latitude,
+          longitude: fix.longitude,
+          accuracy: fix.accuracy ?? undefined,
+        }),
+      })
+        .then((res) => { if (!res.ok) setLocationSharingStatus('error'); })
+        .catch(() => setLocationSharingStatus('error'));
+    };
+
+    report();
+    const interval = setInterval(report, LOCATION_REPORT_INTERVAL_MS);
     return () => clearInterval(interval);
-  }, [data]);
+  }, [sharingRequested, trackedAssignmentId]);
+
+  // Unmount: the subscription must never outlive the screen.
+  useEffect(() => () => trackerRef.current?.stop(), []);
 
   // ─── Toast auto-dismiss ──────────────────────────────────
   useEffect(() => {
@@ -199,6 +260,10 @@ export default function ResponderCaseDetailPage() {
   // ─── Status actions ──────────────────────────────────────
   const transitionStatus = async (newStatus: string) => {
     if (!data) return;
+    // Accepting / rolling out / arriving are the meaningful actions that also
+    // consent to live sharing. Started before the await, while the click is
+    // still a real user gesture. Completing stops it.
+    if (['ACCEPTED', 'EN_ROUTE', 'ARRIVED'].includes(newStatus)) startLocationSharing();
     setActionLoading(true);
     try {
       const res = await fetch(`/api/responder/assignments/${data.assignmentId}/status`, {
@@ -210,6 +275,7 @@ export default function ResponderCaseDetailPage() {
         const d = await res.json();
         throw new Error(d.error || 'Failed');
       }
+      if (newStatus === 'COMPLETED') stopLocationSharing();
       await fetchCase();
       const labels: Record<string, string> = {
         ACCEPTED: isUrdu ? 'کیس قبول کر لیا گیا!' : 'Assignment Accepted!',
@@ -443,28 +509,57 @@ export default function ResponderCaseDetailPage() {
               </div>
             </section>
 
-            {/* ── GPS / LOCATION SHARING STATUS ── */}
-            <div className={`p-2.5 rounded-xl border flex items-center justify-between text-xs ${
-              gpsStatus === 'available' ? 'bg-emerald-500/5 border-emerald-500/20' :
-              gpsStatus === 'denied' ? 'bg-amber-500/5 border-amber-500/20' :
+            {/* ── GPS / LOCATION SHARING (opt-in, one watcher) ── */}
+            <div className={`p-2.5 rounded-xl border text-xs space-y-2 ${
+              locationSharingStatus === 'active' ? 'bg-emerald-500/5 border-emerald-500/20' :
+              locationSharingStatus === 'blocked' || locationSharingStatus === 'error' ? 'bg-amber-500/5 border-amber-500/20' :
               'bg-[#11161F] border-[#30363D]'
             }`}>
-              <div className="flex items-center gap-2">
-                <span className={`w-2 h-2 rounded-full ${
-                  gpsStatus === 'available' ? 'bg-emerald-400 animate-ping' :
-                  gpsStatus === 'denied' ? 'bg-amber-400' :
-                  'bg-gray-500'
-                }`} />
-                <span className={`font-mono font-bold text-[10px] ${
-                  gpsStatus === 'available' ? 'text-emerald-400' :
-                  gpsStatus === 'denied' ? 'text-amber-400' :
-                  'text-gray-400'
-                }`}>
-                  {gpsStatus === 'available' ? 'LIVE GPS • Location sharing active' :
-                   gpsStatus === 'denied' ? 'GPS permission denied — status actions still work' :
-                   'GPS unavailable'}
-                </span>
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className={`w-2 h-2 rounded-full shrink-0 ${
+                    locationSharingStatus === 'active' ? 'bg-emerald-400 animate-ping' :
+                    locationSharingStatus === 'blocked' || locationSharingStatus === 'error' ? 'bg-amber-400' :
+                    gpsStatus === 'denied' ? 'bg-amber-400' :
+                    'bg-gray-500'
+                  }`} />
+                  <span className={`font-mono font-bold text-[10px] truncate ${
+                    locationSharingStatus === 'active' ? 'text-emerald-400' :
+                    locationSharingStatus === 'blocked' || locationSharingStatus === 'error' || locationSharingStatus === 'retrying' ? 'text-amber-400' :
+                    'text-gray-400'
+                  }`}>
+                    {locationSharingStatus === 'active' ? t.gpsStatusReady :
+                     locationSharingStatus === 'starting' ? t.sharingStatusStarting :
+                     locationSharingStatus === 'blocked' ? t.sharingStatusBlocked :
+                     locationSharingStatus === 'retrying' ? t.sharingStatusRetrying :
+                     locationSharingStatus === 'error' ? t.sharingStatusError :
+                     t.sharingStatusOff}
+                  </span>
+                </div>
+                {trackedAssignmentId !== null && (
+                  sharingRequested ? (
+                    <button
+                      type="button"
+                      onClick={stopLocationSharing}
+                      className="shrink-0 py-1.5 px-2.5 rounded-lg bg-[#11161F] hover:bg-[#161B22] border border-[#30363D] text-gray-300 text-[10px] font-bold min-h-[34px]"
+                    >
+                      {t.stopLocationSharing}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => startLocationSharing(false)}
+                      className="shrink-0 py-1.5 px-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold min-h-[34px]"
+                    >
+                      {t.startLocationSharing}
+                    </button>
+                  )
+                )}
               </div>
+              {locationSharingStatus === 'blocked' && (
+                <p className="text-[10px] leading-relaxed text-amber-400" role="status">{t.gpsBlockedResponder}</p>
+              )}
+              <p className="text-[10px] leading-relaxed text-[#6E7681]">{t.sharingConsentNotice}</p>
             </div>
 
             {/* ── CASE INFORMATION ── */}
