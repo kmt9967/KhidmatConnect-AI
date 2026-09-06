@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useLanguage } from '@/i18n/LanguageContext';
@@ -22,10 +22,16 @@ import {
   MessageSquare,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { getCurrentPosition } from '@/lib/maps/geolocation';
+import { getCurrentPosition, probePermissionState } from '@/lib/maps/geolocation';
 import type { GeolocationResult } from '@/lib/maps/types';
-
-type GpsState = 'idle' | 'locating' | 'success' | 'error';
+import {
+  gpsButtonLabel,
+  gpsHelpMessage,
+  shouldOfferGpsRetry,
+  toGpsUiState,
+  type GpsCopy,
+  type GpsUiState,
+} from '@/lib/maps/geolocationUi';
 
 const CASE_STORAGE_PREFIX = 'khidmatconnect_case_';
 
@@ -41,7 +47,8 @@ export default function EmergencyPage() {
   const router = useRouter();
 
   // Form state
-  const [gpsState, setGpsState] = useState<GpsState>('idle');
+  // Geolocation UX state - see src/lib/maps/geolocationUi.ts for the mapping.
+  const [gpsUiState, setGpsUiState] = useState<GpsUiState>('default');
   const [location, setLocation] = useState('');
   const [message, setMessage] = useState('');
   const [primaryPhone, setPrimaryPhone] = useState('');
@@ -59,7 +66,40 @@ export default function EmergencyPage() {
   // Real geolocation state
   const [geoCoords, setGeoCoords] = useState<{ latitude: number; longitude: number; accuracy?: number } | null>(null);
   const [locationConfirmed, setLocationConfirmed] = useState(false);
-  const [geoStatusMessage, setGeoStatusMessage] = useState('');
+
+  // Every string the GPS control can show, in the active language.
+  const gpsCopy: GpsCopy = useMemo(
+    () => ({
+      defaultLabel: t.useMyLocation,
+      loadingLabel: t.gpsLocating,
+      successLabel: t.gpsDetected,
+      blocked: t.gpsBlockedHelp,
+      unavailable: t.gpsUnavailableHelp,
+      timeout: t.gpsTimeoutHelp,
+      unsupported: t.gpsUnsupportedHelp,
+      insecure: t.gpsInsecureHelp,
+      tryAgain: t.tryAgain,
+    }),
+    [t],
+  );
+
+  const gpsLoading = gpsUiState === 'loading';
+  const gpsSuccess = gpsUiState === 'success';
+  const gpsFailed =
+    !gpsLoading && !gpsSuccess && gpsUiState !== 'default';
+
+  // Derived, never stored. A translated string kept in state froze in whatever
+  // language was active at click time, so switching to Urdu after a failed
+  // detection left English text inside the RTL layout.
+  const geoStatusMessage = gpsFailed ? gpsHelpMessage(gpsUiState, gpsCopy) : '';
+
+  // Reads the STORED decision only. navigator.permissions.query can never open
+  // a prompt and never reveals location, so unlike a position request this is
+  // safe on load - it just means a blocked origin gets the correct explanation
+  // on the first click instead of a meaningless "GPS unavailable".
+  useEffect(() => {
+    void probePermissionState();
+  }, []);
 
   // Check for active case in localStorage
   useEffect(() => {
@@ -100,15 +140,17 @@ export default function EmergencyPage() {
     }
   }, [message, detectCritical]);
 
-  // Real geolocation via browser Geolocation API
-  const handleGps = async () => {
-    setGpsState('locating');
-    setGeoStatusMessage('');
+  // Geolocation is requested ONLY from this click handler - never on load, never
+  // on a timer. `force` is used by "Try Again": the user may have just changed
+  // the browser setting, so that click makes one real API call instead of
+  // trusting our cached Block decision.
+  const handleGps = async (force = false) => {
+    setGpsUiState('loading');
 
-    const result: GeolocationResult = await getCurrentPosition();
+    const result: GeolocationResult = await getCurrentPosition(force ? { force: true } : {});
 
     if (result.status === 'SUCCESS' && result.latitude != null && result.longitude != null) {
-      setGpsState('success');
+      setGpsUiState('success');
       setGeoCoords({
         latitude: result.latitude,
         longitude: result.longitude,
@@ -116,7 +158,11 @@ export default function EmergencyPage() {
       });
       setLocationConfirmed(true);
 
-      // Try reverse geocoding for a readable address (non-blocking)
+      // Try reverse geocoding for a readable address (non-blocking).
+      // Tracked in a local because `location` is a stale closure value here -
+      // reading it after setLocation() used to overwrite a good address with
+      // raw coordinates.
+      let readableAddress = '';
       try {
         const res = await fetch('/api/maps/reverse-geocode', {
           method: 'POST',
@@ -126,6 +172,7 @@ export default function EmergencyPage() {
         if (res.ok) {
           const data = await res.json();
           if (data.formattedAddress) {
+            readableAddress = data.formattedAddress;
             setLocation(data.formattedAddress);
           }
         }
@@ -133,22 +180,19 @@ export default function EmergencyPage() {
         // Reverse geocoding failure is non-critical — keep coordinates
       }
 
-      // If location text is still empty, show coordinates
-      if (!location) {
+      // Only fall back to raw coordinates when there is genuinely no text.
+      if (!readableAddress && !location) {
         setLocation(`${result.latitude.toFixed(5)}, ${result.longitude.toFixed(5)}`);
       }
-    } else {
-      setGpsState('error');
-      setGeoCoords(null);
-      setLocationConfirmed(false);
-      const messages: Record<string, string> = {
-        DENIED: 'Location permission denied. You can enter your location manually.',
-        UNAVAILABLE: 'Location unavailable. You can enter your location manually.',
-        TIMEOUT: 'Location request timed out. You can try again or enter manually.',
-        UNSUPPORTED: 'Your browser does not support location. Please enter manually.',
-      };
-      setGeoStatusMessage(messages[result.status] || 'Could not detect location.');
+      return;
     }
+
+    // Any failure keeps the form fully usable. Submitting an emergency never
+    // depends on this call succeeding.
+    const state = toGpsUiState(result.status);
+    setGpsUiState(state);
+    setGeoCoords(null);
+    setLocationConfirmed(false);
   };
 
   // Submit handler — real backend API call
@@ -246,7 +290,7 @@ export default function EmergencyPage() {
                   setShowAlternate(false);
                   setShowFollowUp(false);
                   setIsCritical(false);
-                  setGpsState('idle');
+                  setGpsUiState('default');
                 }}
                 className="rounded-xl border border-[#21262D] px-6 py-3 text-sm text-[#8B949E] hover:bg-[#1A1F2B]"
               >
@@ -324,7 +368,7 @@ export default function EmergencyPage() {
               </label>
               <div className="relative">
                 <MapPin className={`absolute top-3.5 ${isUrdu ? 'right-3.5' : 'left-3.5'} h-5 w-5 ${
-                  gpsState === 'success' ? 'text-[#3FB950]' : gpsState === 'error' ? 'text-[#F85149]' : 'text-[#6E7681]'
+                  gpsSuccess ? 'text-[#3FB950]' : gpsFailed ? 'text-[#D29922]' : 'text-[#6E7681]'
                 }`} />
                 <input
                   type="text"
@@ -332,43 +376,54 @@ export default function EmergencyPage() {
                   onChange={(e) => setLocation(e.target.value)}
                   placeholder={t.locationPlaceholder}
                   className={`w-full rounded-xl border bg-[#11151C] py-3.5 ${isUrdu ? 'pr-12 pl-4' : 'pl-12 pr-4'} text-sm text-[#E6EDF3] placeholder-[#6E7681] transition-colors ${
-                    gpsState === 'success'
+                    gpsSuccess
                       ? 'border-[#3FB950]/30 focus:border-[#3FB950]/50'
-                      : gpsState === 'error'
-                      ? 'border-[#F85149]/30 focus:border-[#F85149]/50'
+                      : gpsFailed
+                      ? 'border-[#D29922]/40 focus:border-[#D29922]/60'
                       : 'border-[#21262D] focus:border-[#30363D]'
                   } outline-none`}
                 />
               </div>
+              {/* Location is OPTIONAL. This is the only place on this page that
+                  can reach the browser Geolocation API. */}
               <button
-                onClick={handleGps}
-                disabled={gpsState === 'locating'}
-                className={`mt-2 flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium transition-colors ${
-                  gpsState === 'success'
+                type="button"
+                onClick={() => handleGps(false)}
+                disabled={gpsLoading}
+                className={`mt-2 flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium transition-colors min-h-[36px] ${
+                  gpsSuccess
                     ? 'bg-[#3FB950]/10 text-[#3FB950]'
-                    : gpsState === 'error'
-                    ? 'bg-[#F85149]/10 text-[#F85149]'
+                    : gpsFailed
+                    ? 'bg-[#D29922]/10 text-[#D29922]'
                     : 'bg-[#1A1F2B] text-[#8B949E] hover:text-[#E6EDF3]'
                 }`}
               >
-                {gpsState === 'locating' ? (
+                {gpsLoading ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : gpsState === 'success' ? (
+                ) : gpsSuccess ? (
                   <CheckCircle2 className="h-3.5 w-3.5" />
-                ) : gpsState === 'error' ? (
+                ) : gpsFailed ? (
                   <XCircle className="h-3.5 w-3.5" />
                 ) : (
                   <NavIcon className="h-3.5 w-3.5" />
                 )}
-                {gpsState === 'idle' && t.useMyLocation}
-                {gpsState === 'locating' && (lang === 'ur' ? 'مقام تلاش ہو رہا ہے...' : 'Locating...')}
-                {gpsState === 'success' && t.gpsDetected}
-                {gpsState === 'error' && t.gpsError}
+                {gpsButtonLabel(gpsUiState, gpsCopy)}
               </button>
-              {geoStatusMessage && gpsState === 'error' && (
-                <p className="mt-1 text-[11px] text-[#D29922]">{geoStatusMessage}</p>
+              {gpsFailed && geoStatusMessage && (
+                <p className="mt-1.5 text-[11px] leading-relaxed text-[#D29922]" role="status">
+                  {geoStatusMessage}
+                </p>
               )}
-              {gpsState === 'success' && geoCoords && (
+              {gpsFailed && shouldOfferGpsRetry(gpsUiState) && (
+                <button
+                  type="button"
+                  onClick={() => handleGps(true)}
+                  className="mt-1.5 rounded-lg border border-[#30363D] px-2.5 py-1 text-[11px] font-semibold text-[#8B949E] hover:text-[#E6EDF3] hover:border-[#3FB950]/40 transition-colors"
+                >
+                  {gpsCopy.tryAgain}
+                </button>
+              )}
+              {gpsSuccess && geoCoords && (
                 <p className="mt-1 text-[11px] text-[#3FB950]">
                   GPS: {geoCoords.latitude.toFixed(5)}, {geoCoords.longitude.toFixed(5)}
                   {geoCoords.accuracy != null && ` (±${Math.round(geoCoords.accuracy)}m)`}

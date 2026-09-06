@@ -93,6 +93,13 @@ body {
   }
 }
 
+/* Indeterminate loading affordance for the mobile opening screen. */
+.splash-bar {
+  background-image: linear-gradient(90deg, transparent, var(--text-accent-emerald), transparent);
+  background-size: 200% 100%;
+  animation: shimmer 1.1s linear infinite;
+}
+
 /* ─── Glow Utilities ────────────────────────────────────── */
 .glow-blue {
   box-shadow: 0 0 20px rgba(88, 166, 255, 0.15), 0 0 6px rgba(88, 166, 255, 0.1);
