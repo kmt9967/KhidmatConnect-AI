@@ -21,7 +21,7 @@ The result is not a lack of goodwill. It is a lack of **coordination infrastruct
 
 KhidmatConnect AI puts one authoritative case at the centre of that chaos, with three doors into it and one auditable lifecycle out of it:
 
-- A **citizen reports** on a no-login web form (Urdu / English / mixed, RTL-aware) or simply **calls a phone number** and talks to a voice agent that asks for exactly what a coordinator needs.
+- A **citizen reports** on a no-login web form (Urdu / English / mixed, RTL-aware) or, for an ultra-urgent emergency, simply **calls the hotline** and talks to a voice agent that asks for exactly what a coordinator needs - voice (Retell/Twilio) is an additional access path into the same authoritative case, not a separate product.
 - The case is **created the moment the call connects - before any AI runs**. Facts are appended as the caller supplies them; the raw words are stored verbatim as the authoritative record.
 - **Alibaba Cloud Model Studio (Qwen)** reads the raw text and returns structured decision-support: urgency, categories, key needs, special needs, what information is missing, and one good follow-up question.
 - A **human operator** reviews, then assigns a **real responder and a real ambulance**. Availability is enforced, so a unit cannot be double-booked.
@@ -229,11 +229,11 @@ npx tsx scripts/voice-verify-tests.ts      # legacy voice prototype path
 - Voice hotline: the team's provisioned Twilio inbound number (kept on the demo card, dial it from a mobile phone)
 - Retell webhooks land on `/api/voice/retell/webhook`, which **verifies the `x-retell-signature` HMAC and returns 401 to unsigned requests** (verified live). Tool calls arrive at `/api/voice/retell/update-case`.
 - Deployment model on the shared host: build **locally** (`npm run build`), ship the runtime-required `.next` output as a ZIP, restart Passenger. The host cannot run `next build` itself.
-- Current production build: `590be90`, BUILD_ID `kKgfwmtbQ7HFeXuUWDqZP`.
+- Deployed revision: the latest `.next` ZIP shipped from the default branch (`master`) via the workflow above.
 
 ## Testing
 
-Real, reproducible evidence at HEAD `590be90`:
+Real, reproducible evidence (suites re-run against the current release):
 
 | Suite | Result |
 |---|---|
