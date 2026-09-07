@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react';
 import {
   Activity,
   AlertOctagon,
@@ -10,10 +10,12 @@ import {
   ChevronRight,
   Clock,
   Compass,
+  ExternalLink,
   Globe,
   LogOut,
   MapPin,
   Mic,
+  Navigation,
   Radio,
   Search,
 } from 'lucide-react';
@@ -22,7 +24,9 @@ import { getTranslation } from '@/i18n/translations';
 import InteractiveMap from '@/components/InteractiveMap';
 import GoogleMap from '@/components/maps/GoogleMap';
 import { isGoogleMapsConfigured } from '@/lib/maps/googleMapsLoader';
-import type { MapMarkerData } from '@/lib/maps/types';
+import { DEFAULT_MAP_ZOOM, type MapMarkerData } from '@/lib/maps/types';
+import { queueMarkersFromCases } from '@/lib/maps/operatorMap';
+import { googleMapsViewUrl, googleMapsDirectionsUrl } from '@/lib/maps/externalLinks';
 import AuthGuard from '@/components/AuthGuard';
 import { useAuth } from '@/lib/auth/AuthContext';
 import Link from 'next/link';
@@ -66,6 +70,9 @@ export default function OperatorPage() {
   const { user, logout } = useAuth();
 
   const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
+  // Marker whose info card is open on the map. Owned here so the queue list
+  // and the map can both drive it, and so polling never force-closes it.
+  const [openInfoId, setOpenInfoId] = useState<string | null>(null);
   const [activeQueueTab, setActiveQueueTab] = useState<'all_queue' | 'unconfirmed'>('all_queue');
   const [activeFilter, setActiveFilter] = useState<'all' | 'critical' | 'unassigned' | 'medical' | 'rescue'>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -186,14 +193,127 @@ export default function OperatorPage() {
   // Clicking a queue card selects it on the map; the Details link opens the real case page.
   const handleSelectCase = useCallback((caseId: string) => {
     setSelectedCaseId(caseId);
+    setOpenInfoId(caseId);
   }, []);
+
+  // ─── Operator map wiring ──────────────────────────────────
+  // Markers are rebuilt from the polled cases, but GoogleMap reconciles by id
+  // so unchanged markers keep their Google object (and any open info card).
+  const mapMarkers = useMemo(() => queueMarkersFromCases(apiActiveCases), [apiActiveCases]);
+
+  // Value-memoized focus point: identity is stable across polls while the
+  // selected case coordinates do not change, so the map never re-pans on refresh.
+  const selectedLat = selectedApiCase?.latitude ?? null;
+  const selectedLng = selectedApiCase?.longitude ?? null;
+  const mapCenter = useMemo(
+    () => (selectedLat != null && selectedLng != null ? { latitude: selectedLat, longitude: selectedLng } : null),
+    [selectedLat, selectedLng],
+  );
+
+  // Latest cases kept in a ref so the info-card renderer stays referentially
+  // stable (its identity must not change on every poll).
+  const casesRef = useRef<ApiActiveCase[]>(apiActiveCases);
+  casesRef.current = apiActiveCases;
+  // Per-card DOM refs so a marker click can scroll the matching queue card into view.
+  const cardRefs = useRef<Record<string, HTMLDivElement | null>>({});
+
+  const handleMarkerClick = useCallback((marker: MapMarkerData) => {
+    if (marker.type === 'EMERGENCY') {
+      setSelectedCaseId(marker.id);
+      setOpenInfoId(marker.id);
+      cardRefs.current[marker.id]?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    } else {
+      setOpenInfoId(marker.id);
+    }
+  }, []);
+
+  const handleInfoClose = useCallback(() => setOpenInfoId(null), []);
+
+  const infoActionClass =
+    'inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-bold border transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500';
+
+  // Renders the marker info card. Mounted into the InfoWindow via a dedicated
+  // React root, so it uses plain anchors (no router/context) and captured t/isUrdu.
+  const renderInfoCard = useCallback(
+    (marker: MapMarkerData): ReactNode => {
+      const isEmergency = marker.type === 'EMERGENCY';
+      const apiCase = isEmergency ? casesRef.current.find((c) => c.caseCode === marker.id) : undefined;
+      const urgency = marker.urgency;
+      const uColor =
+        urgency === 'CRITICAL' ? '#F85149' : urgency === 'HIGH' ? '#F0883E' : urgency === 'MEDIUM' ? '#D29922' : urgency === 'LOW' ? '#3FB950' : '#58A6FF';
+      const point = marker.position;
+      const reportedAt = apiCase
+        ? new Date(apiCase.createdAt).toLocaleString('en-PK', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
+        : null;
+      return (
+        <div dir={isUrdu ? 'rtl' : 'ltr'} className="p-3 space-y-2 min-w-[230px] max-w-[300px]">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <div className="font-mono font-black text-sm text-white truncate">{isEmergency ? marker.id : marker.title}</div>
+              {reportedAt && (
+                <div className="text-[10px] text-gray-400 mt-0.5 flex items-center gap-1">
+                  <Clock className="w-3 h-3" />{t.mapReportedAt}: {reportedAt}
+                </div>
+              )}
+            </div>
+            {urgency && (
+              <span
+                className="shrink-0 px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider"
+                style={{ background: `${uColor}22`, color: uColor, border: `1px solid ${uColor}66` }}
+              >
+                {urgency}
+              </span>
+            )}
+          </div>
+
+          {isEmergency && apiCase?.categories?.[0] && (
+            <div className="text-[10px] font-bold text-blue-300 uppercase tracking-wider">{apiCase.categories[0]}</div>
+          )}
+
+          <div className="text-xs text-gray-200 leading-snug flex items-start gap-1.5">
+            <MapPin className="w-3.5 h-3.5 text-gray-400 shrink-0 mt-0.5" />
+            <span>{marker.subtitle || apiCase?.locationText || '—'}</span>
+          </div>
+
+          <div className="text-[11px] text-gray-400">
+            {t.mapStatus}: <span className="font-bold text-gray-200">{isEmergency ? apiCase?.status ?? '—' : marker.subtitle}</span>
+          </div>
+
+          <div className="flex flex-wrap gap-1.5 pt-1 border-t border-[#30363D]/60">
+            {isEmergency && (
+              <a href={`/operator/cases/${marker.id}`} className={`${infoActionClass} bg-blue-600 text-white border-blue-500 hover:bg-blue-500`}>
+                <ChevronRight className="w-3 h-3" />{t.mapViewCase}
+              </a>
+            )}
+            <a
+              href={googleMapsViewUrl(point)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={`${infoActionClass} bg-[#0B0E14] text-gray-200 border-[#30363D] hover:text-white hover:border-gray-500`}
+            >
+              <ExternalLink className="w-3 h-3" />{t.mapOpenInMaps}
+            </a>
+            <a
+              href={googleMapsDirectionsUrl(point)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={`${infoActionClass} bg-[#0B0E14] text-gray-200 border-[#30363D] hover:text-white hover:border-gray-500`}
+            >
+              <Navigation className="w-3 h-3" />{t.mapNavigate}
+            </a>
+          </div>
+        </div>
+      );
+    },
+    [t, isUrdu],
+  );
 
   // ─── latestCriticalAlert from real data ───────────────────
   const latestCriticalAlert = queueCases.find((c) => c.urgency === 'CRITICAL' && c.assignments.length === 0);
 
   return (
     <AuthGuard requiredRole="OPERATOR">
-    <div dir={isUrdu ? 'rtl' : 'ltr'} className="min-h-screen bg-[#080B10] text-[#E6EDF3] flex flex-col font-sans selection:bg-blue-600/30 selection:text-blue-200">
+    <div dir={isUrdu ? 'rtl' : 'ltr'} className="min-h-screen lg:h-screen lg:overflow-hidden bg-[#080B10] text-[#E6EDF3] flex flex-col font-sans selection:bg-blue-600/30 selection:text-blue-200">
       {/* 1. TOP COMPACT OPERATOR COMMAND BAR */}
       <header className="bg-[#11161F] border-b border-[#30363D] px-4 sm:px-6 py-2.5 shrink-0 z-30">
         <div className="flex items-center justify-between gap-4">
@@ -367,59 +487,25 @@ export default function OperatorPage() {
             </div>
           )}
 
-          <div className="flex-1 rounded-2xl overflow-hidden border border-[#30363D] relative shadow-inner">
+          {/* lg:flex-1 (not flex-1): below lg the root height is indefinite
+              (min-h-screen), so a grown wrapper height is not definite for the
+              shell's h-full and the shell falls back to min-h-[450px] — which
+              left empty space inside the border on tall tablet viewports.
+              Sizing the card to content below lg keeps the border tight. */}
+          <div className="lg:flex-1 rounded-2xl overflow-hidden border border-[#30363D] relative shadow-inner">
             {useGoogleMap ? (
               <GoogleMap
-                center={selectedApiCase?.latitude != null && selectedApiCase?.longitude != null
-                  ? { latitude: selectedApiCase.latitude, longitude: selectedApiCase.longitude }
-                  : null}
-                markers={(() => {
-                  const markers: MapMarkerData[] = [];
-                  // Emergency markers from real API data
-                  apiActiveCases.forEach((c) => {
-                    if (c.latitude != null && c.longitude != null) {
-                      markers.push({
-                        id: c.caseCode,
-                        type: 'EMERGENCY',
-                        position: { latitude: c.latitude, longitude: c.longitude },
-                        title: `${c.caseCode} • ${(c.categories[0] || 'EMERGENCY').toUpperCase()}`,
-                        subtitle: c.locationText || 'Emergency',
-                        urgency: c.urgency as 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | undefined,
-                      });
-                    }
-                  });
-                  // Resource markers come from real assignment telemetry below
-                  // ─── Milestone 8: Real responder/ambulance markers from API ───
-                  apiActiveCases.forEach((c) => {
-                    c.assignments.forEach((a) => {
-                      if (a.responder?.latitude && a.responder?.longitude) {
-                        markers.push({
-                          id: `resp-${a.responder.id}`,
-                          type: 'RESOURCE',
-                          position: { latitude: a.responder.latitude, longitude: a.responder.longitude },
-                          title: a.responder.name,
-                          subtitle: a.status,
-                          available: a.responder.availabilityStatus === 'AVAILABLE',
-                        });
-                      }
-                      if (a.ambulance?.latitude && a.ambulance?.longitude) {
-                        markers.push({
-                          id: `amb-${a.ambulance.id}`,
-                          type: 'AMBULANCE',
-                          position: { latitude: a.ambulance.latitude, longitude: a.ambulance.longitude },
-                          title: a.ambulance.identifier,
-                          subtitle: a.status,
-                          available: a.ambulance.availabilityStatus === 'AVAILABLE',
-                        });
-                      }
-                    });
-                  });
-                  return markers;
-                })()}
-                onMarkerClick={(marker) => {
-                  const apiCase = apiActiveCases.find((c) => c.caseCode === marker.id);
-                  if (apiCase) { setSelectedCaseId(apiCase.caseCode); }
-                }}
+                center={mapCenter}
+                markers={mapMarkers}
+                selectedMarkerId={selectedCaseId}
+                openInfoMarkerId={openInfoId}
+                onInfoClose={handleInfoClose}
+                onMarkerClick={handleMarkerClick}
+                infoCard={renderInfoCard}
+                focusZoom={selectedApiCase ? 15 : DEFAULT_MAP_ZOOM}
+                recenterLabel={t.mapBackToCase}
+                fullscreenLabel={t.mapFullscreen}
+                exitFullscreenLabel={t.mapExitFullscreen}
                 heightClass="h-full min-h-[450px]"
                 className="rounded-2xl"
               />
@@ -498,7 +584,7 @@ export default function OperatorPage() {
                   );
                   const primaryCategory = item.categories[0] || '';
                   return (
-                    <div key={item.caseCode} onClick={() => { setSelectedCaseId(item.caseCode); }} className={`p-3 rounded-2xl border transition-all cursor-pointer relative space-y-2 ${isSelected ? 'bg-[#161B22] border-blue-500 shadow-xl ring-1 ring-blue-500/50' : isCrit ? 'bg-[#11161F] border-red-500/40 hover:border-red-500/80' : 'bg-[#11161F] border-[#30363D] hover:border-gray-500'}`}>
+                    <div key={item.caseCode} ref={(el) => { cardRefs.current[item.caseCode] = el; }} onClick={() => { handleSelectCase(item.caseCode); }} className={`p-3 rounded-2xl border transition-all cursor-pointer relative space-y-2 ${isSelected ? 'bg-[#161B22] border-blue-500 shadow-xl ring-1 ring-blue-500/50' : isCrit ? 'bg-[#11161F] border-red-500/40 hover:border-red-500/80' : 'bg-[#11161F] border-[#30363D] hover:border-gray-500'}`}>
                       <div className="flex items-center justify-between gap-2">
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <span className="font-mono font-black text-white text-xs tracking-tight">{item.caseCode}</span>

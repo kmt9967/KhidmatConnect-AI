@@ -83,6 +83,10 @@ export interface MapMarkerData {
   urgency?: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
   category?: string;
   available?: boolean;
+  /** Lifecycle state of the case this marker represents (e.g. ACTIVE). */
+  caseStatus?: string;
+  /** Whether a responder/ambulance assignment already exists for the case. */
+  assigned?: boolean;
 }
 
 // ─── Location confidence level ──────────────────────────────

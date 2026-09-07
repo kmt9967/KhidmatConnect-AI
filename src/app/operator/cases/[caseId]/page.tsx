@@ -1,20 +1,31 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useLanguage } from '@/i18n/LanguageContext';
+import { getTranslation } from '@/i18n/translations';
 import { useAuth } from '@/lib/auth/AuthContext';
 import AuthGuard from '@/components/AuthGuard';
 import GoogleMap from '@/components/maps/GoogleMap';
 import { isGoogleMapsConfigured } from '@/lib/maps/googleMapsLoader';
 import type { MapMarkerData } from '@/lib/maps/types';
 import {
+  googleMapsViewUrl,
+  googleMapsDirectionsUrl,
+  googleMapsTextSearchUrl,
+  formatCoordinates,
+  copyTextToClipboard,
+} from '@/lib/maps/externalLinks';
+import {
   ArrowLeft,
   AlertOctagon,
   AlertTriangle,
   Brain,
   Clock,
+  Copy,
+  Check,
+  ExternalLink,
   FileText,
   Globe,
   Loader2,
@@ -184,7 +195,8 @@ function formatDate(dateStr: string) {
 export default function OperatorCaseDetailPage() {
   const { caseId } = useParams<{ caseId: string }>();
   const router = useRouter();
-  const { isUrdu, toggleLang } = useLanguage();
+  const { lang, isUrdu, toggleLang } = useLanguage();
+  const t = getTranslation(lang);
   const { user, logout } = useAuth();
 
   const [caseData, setCaseData] = useState<CaseDetail | null>(null);
@@ -314,6 +326,110 @@ export default function OperatorCaseDetailPage() {
       type: 'RESPONDER',
     });
   }
+
+  // ─── Operator map: info card, copy-coords, open-by-default ──
+  const [openInfoId, setOpenInfoId] = useState<string | null>('emergency');
+  const [coordsCopied, setCoordsCopied] = useState(false);
+  // Latest case kept in a ref so the card renderer stays referentially stable
+  // across the 15s poll (its identity must not change on every refresh).
+  const caseRef = useRef<CaseDetail | null>(caseData);
+  caseRef.current = caseData;
+
+  const handleCopyCoords = useCallback(async () => {
+    const c = caseRef.current;
+    if (c?.latitude == null || c?.longitude == null) return;
+    await copyTextToClipboard(formatCoordinates({ latitude: c.latitude, longitude: c.longitude }));
+    setCoordsCopied(true);
+    setTimeout(() => setCoordsCopied(false), 2000);
+  }, []);
+
+  const infoActionClass =
+    'inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-bold border transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500';
+
+  const renderInfoCard = useCallback(
+    (marker: MapMarkerData): ReactNode => {
+      const c = caseRef.current;
+      const isEmergency = marker.type === 'EMERGENCY';
+      const urgency = (isEmergency ? c?.urgency : undefined) as 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | undefined;
+      const cfg = urgency ? URGENCY_CONFIG[urgency] : undefined;
+      const uColor = cfg?.color || '#58A6FF';
+      const point = marker.position;
+      const coords = isEmergency && c?.latitude != null && c?.longitude != null
+        ? formatCoordinates({ latitude: c.latitude, longitude: c.longitude })
+        : null;
+      return (
+        <div dir={isUrdu ? 'rtl' : 'ltr'} className="p-3 space-y-2 min-w-[240px] max-w-[300px]">
+          <div className="flex items-start justify-between gap-2">
+            <div className="font-mono font-black text-sm text-white truncate">{isEmergency ? c?.caseCode : marker.title}</div>
+            {urgency && (
+              <span
+                className="shrink-0 px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider"
+                style={{ background: `${uColor}22`, color: uColor, border: `1px solid ${uColor}66` }}
+              >
+                {t.mapPriority}: {urgency}
+              </span>
+            )}
+          </div>
+
+          {isEmergency && c?.categories?.[0] && (
+            <div className="text-[10px] font-bold text-blue-300 uppercase tracking-wider">{c.categories[0]}</div>
+          )}
+
+          <div className="text-xs text-gray-200 leading-snug flex items-start gap-1.5">
+            <MapPin className="w-3.5 h-3.5 text-gray-400 shrink-0 mt-0.5" />
+            <span>{marker.subtitle || c?.locationText || '—'}</span>
+          </div>
+
+          {coords && (
+            <div className="text-[11px] text-gray-400 font-mono">
+              {t.mapGpsCoordinates}: <span className="text-gray-200">{coords}</span>
+            </div>
+          )}
+
+          {isEmergency && c && (
+            <div className="text-[11px] text-gray-400">
+              {t.mapStatus}: <span className="font-bold" style={{ color: STATUS_LABELS[c.status]?.color || '#E6EDF3' }}>{STATUS_LABELS[c.status]?.en || c.status}</span>
+            </div>
+          )}
+
+          <div className="flex flex-wrap gap-1.5 pt-1 border-t border-[#30363D]/60">
+            <a
+              href={googleMapsViewUrl(point)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={`${infoActionClass} bg-[#0B0E14] text-gray-200 border-[#30363D] hover:text-white hover:border-gray-500`}
+            >
+              <ExternalLink className="w-3 h-3" />{t.mapOpenInMaps}
+            </a>
+            <a
+              href={googleMapsDirectionsUrl(point)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={`${infoActionClass} bg-[#0B0E14] text-gray-200 border-[#30363D] hover:text-white hover:border-gray-500`}
+            >
+              <Navigation className="w-3 h-3" />{t.mapNavigate}
+            </a>
+            {coords && (
+              <button
+                type="button"
+                onClick={handleCopyCoords}
+                className={`${infoActionClass} bg-[#0B0E14] border-[#30363D] ${coordsCopied ? 'text-[#3FB950] border-[#3FB950]/50' : 'text-gray-200 hover:text-white hover:border-gray-500'}`}
+              >
+                {coordsCopied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                {coordsCopied ? t.mapCoordinatesCopied : t.mapCopyCoordinates}
+              </button>
+            )}
+          </div>
+        </div>
+      );
+    },
+    [t, isUrdu, coordsCopied, handleCopyCoords],
+  );
+
+  const handleMarkerClick = useCallback((marker: MapMarkerData) => {
+    setOpenInfoId(marker.id);
+  }, []);
+  const handleInfoClose = useCallback(() => setOpenInfoId(null), []);
 
   return (
     <AuthGuard requiredRole="OPERATOR">
@@ -538,10 +654,38 @@ export default function OperatorCaseDetailPage() {
                       center={{ latitude: caseData.latitude!, longitude: caseData.longitude! }}
                       zoom={15}
                       markers={mapMarkers}
+                      selectedMarkerId={openInfoId}
+                      openInfoMarkerId={openInfoId}
+                      onInfoClose={handleInfoClose}
+                      onMarkerClick={handleMarkerClick}
+                      infoCard={renderInfoCard}
+                      focusZoom={15}
+                      recenterLabel={t.mapBackToCase}
+                      fullscreenLabel={t.mapFullscreen}
+                      exitFullscreenLabel={t.mapExitFullscreen}
+                      heightClass="h-full"
                     />
                   ) : (
-                    <div className="flex items-center justify-center h-full bg-[#0B0E14] text-[#6E7681] text-sm">
-                      {hasGps ? 'Map loading...' : 'No GPS coordinates — see text location above'}
+                    <div className="flex flex-col items-center justify-center gap-3 h-full bg-[#0B0E14] text-[#6E7681] text-sm px-4 text-center">
+                      {hasGps ? (
+                        <span>Map loading...</span>
+                      ) : (
+                        <>
+                          <span className="flex items-center gap-2 text-[#D29922]">
+                            <AlertTriangle className="w-4 h-4" />{t.mapNoGpsTextOnly}
+                          </span>
+                          {caseData?.locationText && (
+                            <a
+                              href={googleMapsTextSearchUrl(caseData.locationText)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-[#161B22] text-gray-200 border border-[#30363D] hover:text-white hover:border-gray-500 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                            >
+                              <ExternalLink className="w-3.5 h-3.5" />{t.mapSearchInMaps}
+                            </a>
+                          )}
+                        </>
+                      )}
                     </div>
                   )}
                 </div>

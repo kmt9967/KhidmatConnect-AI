@@ -114,6 +114,22 @@ export const translations = {
     contactForLocation: 'Contact for Coordinates',
     verifyLandmark: 'Pin on Map',
 
+    // Operator Map Usability
+    mapViewCase: 'View Case',
+    mapOpenInMaps: 'Open in Maps',
+    mapNavigate: 'Navigate',
+    mapBackToCase: 'Back to Case',
+    mapCopyCoordinates: 'Copy Coordinates',
+    mapCoordinatesCopied: 'Coordinates copied',
+    mapSearchInMaps: 'Search Location in Maps',
+    mapNoGpsTextOnly: 'No GPS coordinates — text location only',
+    mapFullscreen: 'Fullscreen map',
+    mapExitFullscreen: 'Exit fullscreen',
+    mapReportedAt: 'Reported',
+    mapStatus: 'Status',
+    mapPriority: 'Priority',
+    mapGpsCoordinates: 'GPS',
+
     // Responder View
     responderName: 'Ahmed Khan',
     responderUnit: 'Unit AKF-07',
@@ -452,6 +468,22 @@ export const translations = {
     unconfirmedNotice: 'ان کیسز میں GPS کوآرڈینیٹس موجود نہیں ہیں۔ یاد رہے کہ لوکیشن نہ ہونے سے ایمرجنسی کی اہمیت کم نہیں ہوتی۔ فوری طور پر کال کر کے نشاندہی کریں۔',
     contactForLocation: 'پتہ معلوم کرنے کے لیے کال کریں',
     verifyLandmark: 'نقشے پر نشان لگائیں',
+
+    // Operator Map Usability
+    mapViewCase: 'کیس دیکھیں',
+    mapOpenInMaps: 'مپس میں کھولیں',
+    mapNavigate: 'رہنمائی کریں',
+    mapBackToCase: 'کیس پر واپس',
+    mapCopyCoordinates: 'کوآرڈینیٹس کاپی کریں',
+    mapCoordinatesCopied: 'کوآرڈینیٹس کاپی ہو گئے',
+    mapSearchInMaps: 'مقام مپس میں تلاش کریں',
+    mapNoGpsTextOnly: 'GPS کوآرڈینیٹس نہیں — صرف متنی مقام',
+    mapFullscreen: 'مکمل اسکرین نقشہ',
+    mapExitFullscreen: 'مکمل اسکرین سے نکلیں',
+    mapReportedAt: 'رپورٹ وقت',
+    mapStatus: 'حالت',
+    mapPriority: 'ترجیح',
+    mapGpsCoordinates: 'GPS',
 
     // Responder View
     responderName: 'احمد خان',

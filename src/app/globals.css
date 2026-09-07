@@ -134,3 +134,40 @@ body {
   background: rgba(88, 166, 255, 0.25);
   color: var(--text-primary);
 }
+
+/* ─── Google Maps InfoWindow dark chrome ──────────────────
+   The operator info card is rendered inside a google.maps.InfoWindow,
+   which defaults to a white bubble. Restyle it to match the command
+   center theme without touching Google's layout behaviour. */
+.kc-map-info {
+  color: var(--text-primary);
+  font-family: var(--font-jakarta), system-ui, -apple-system, sans-serif;
+}
+[dir="rtl"] .kc-map-info {
+  font-family: var(--font-arabic), var(--font-jakarta), system-ui, sans-serif;
+}
+.gm-style .gm-style-iw-c {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 14px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+  padding: 0;
+  max-width: 330px !important;
+}
+.gm-style .gm-style-iw-d {
+  overflow: hidden auto !important;
+  max-height: 260px !important;
+}
+/* Tail (arrow) of the bubble */
+.gm-style .gm-style-iw-c .gm-style-iw-tc::after,
+.gm-style .gm-style-iw-tc::after {
+  background: var(--bg-elevated);
+}
+/* Close button: Google renders it as a light image - invert for dark bg */
+.gm-style .gm-style-iw-d + div,
+.gm-style button.gm-ui-hover-effect {
+  filter: invert(1);
+  top: 4px !important;
+  right: 4px !important;
+}
+
