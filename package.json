@@ -30,6 +30,8 @@
     "openai": "^7.8.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "retell-client-js-sdk": "^2.0.8",
+    "retell-sdk": "^5.64.0",
     "twilio": "^6.1.0",
     "zod": "^4.5.4"
   },
