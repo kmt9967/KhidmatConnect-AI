@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useLanguage } from '@/i18n/LanguageContext';
@@ -20,6 +20,7 @@ import {
   Navigation as NavIcon,
   ArrowLeft,
   MessageSquare,
+  Square,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { getCurrentPosition, probePermissionState } from '@/lib/maps/geolocation';
@@ -32,6 +33,13 @@ import {
   type GpsCopy,
   type GpsUiState,
 } from '@/lib/maps/geolocationUi';
+import {
+  SpeechDictationController,
+  appendTranscript,
+  speechLangForLanguage,
+  type SpeechPhase,
+  type SpeechNotice,
+} from '@/lib/voice/speechRecognition';
 
 const CASE_STORAGE_PREFIX = 'khidmatconnect_case_';
 
@@ -62,6 +70,8 @@ export default function EmergencyPage() {
   const [newCaseCode, setNewCaseCode] = useState('');
   const [submitError, setSubmitError] = useState('');
   const [activeCaseCode, setActiveCaseCode] = useState<string | null>(null);
+
+  // M17 — real browser dictation (Web Speech API). Input convenience ONLY.
 
   // Real geolocation state
   const [geoCoords, setGeoCoords] = useState<{ latitude: number; longitude: number; accuracy?: number } | null>(null);
@@ -116,6 +126,69 @@ export default function EmergencyPage() {
       // Ignore localStorage errors
     }
   }, []);
+
+  const [speechPhase, setSpeechPhase] = useState<SpeechPhase>('idle');
+  const [speechNotice, setSpeechNotice] = useState<SpeechNotice>(null);
+  const [interimTranscript, setInterimTranscript] = useState('');
+  const speechControllerRef = useRef<SpeechDictationController | null>(null);
+
+  // Destroy any live recognition on unmount so the mic is never left open.
+  useEffect(() => {
+    return () => {
+      speechControllerRef.current?.destroy();
+      speechControllerRef.current = null;
+    };
+  }, []);
+
+  // Starts ONLY from the mic click; toggles to stop. Never auto-submits, never
+  // creates a case, never dispatches, never blocks typing. A fresh controller
+  // per start guarantees the current UI language is used.
+  const handleMicClick = useCallback(() => {
+    if (speechControllerRef.current?.isActive) {
+      speechControllerRef.current.stop();
+      setInterimTranscript('');
+      return;
+    }
+    speechControllerRef.current?.destroy();
+    setSpeechNotice(null);
+    const controller = new SpeechDictationController(
+      {
+        onPhaseChange: (phase) => {
+          setSpeechPhase(phase);
+          if (phase !== 'listening') setInterimTranscript('');
+        },
+        onNotice: (notice) => setSpeechNotice(notice),
+        onFinalTranscript: (text) => {
+          // Append the caller's own words verbatim; the user can still edit.
+          setMessage((prev) => appendTranscript(prev, text));
+          setInterimTranscript('');
+        },
+        onInterimTranscript: (partial) => setInterimTranscript(partial),
+      },
+      { lang: speechLangForLanguage(lang) },
+    );
+    speechControllerRef.current = controller;
+    controller.start();
+  }, [lang]);
+
+  // Derived (never stored) so a language switch re-renders the copy correctly.
+  const speechNoticeMessage = useMemo(() => {
+    switch (speechNotice) {
+      case 'unsupported': return t.voiceMicUnsupported;
+      case 'insecure': return t.voiceMicInsecure;
+      case 'denied': return t.voiceMicDenied;
+      case 'no-mic': return t.voiceMicNoMic;
+      case 'network': return t.voiceMicNetwork;
+      case 'no-speech': return t.voiceMicNoSpeech;
+      case 'error': return t.voiceMicError;
+      default: return '';
+    }
+  }, [speechNotice, t]);
+
+  const micLabel =
+    speechPhase === 'listening' ? t.voiceMicListeningLabel
+    : speechPhase === 'starting' ? t.voiceMicStartingLabel
+    : t.voiceMicIdleLabel;
 
   // Critical keyword detection
   const criticalKeywordsEn = ['unconscious', 'collapsed', 'dying', 'blood', 'fire', 'shooting', 'breathing', 'heart attack', 'stroke'];
@@ -448,14 +521,47 @@ export default function EmergencyPage() {
                   rows={3}
                   className="w-full rounded-xl border border-[#21262D] bg-[#11151C] px-4 py-3.5 text-sm text-[#E6EDF3] placeholder-[#6E7681] focus:border-[#30363D] outline-none resize-none"
                 />
-                {/* Mic button */}
+                {/* M17 — real dictation mic. Starts ONLY on this click and
+                    toggles to a stop control while listening. Input convenience
+                    only: it never submits the form or triggers dispatch. */}
                 <button
-                  className={`absolute bottom-3 ${isUrdu ? 'left-3' : 'right-3'} flex h-10 w-10 items-center justify-center rounded-full border border-[#21262D] bg-[#1A1F2B] text-[#6E7681] hover:text-[#E6EDF3] hover:border-[#30363D] transition-colors`}
-                  title={t.voiceInputTitle}
+                  type="button"
+                  onClick={handleMicClick}
+                  aria-label={micLabel}
+                  aria-pressed={speechPhase === 'listening'}
+                  title={micLabel}
+                  className={`absolute bottom-3 ${isUrdu ? 'left-3' : 'right-3'} flex h-10 w-10 items-center justify-center rounded-full border transition-colors ${
+                    speechPhase === 'listening'
+                      ? 'border-[#F85149]/60 bg-[#F85149]/15 text-[#F85149] animate-pulse'
+                      : speechPhase === 'starting'
+                      ? 'border-[#30363D] bg-[#1A1F2B] text-[#8B949E]'
+                      : 'border-[#21262D] bg-[#1A1F2B] text-[#6E7681] hover:text-[#E6EDF3] hover:border-[#30363D]'
+                  }`}
                 >
-                  <Mic className="h-5 w-5" />
+                  {speechPhase === 'starting' ? (
+                    <Loader2 className="h-5 w-5 animate-spin" />
+                  ) : speechPhase === 'listening' ? (
+                    <Square className="h-4 w-4" />
+                  ) : (
+                    <Mic className="h-5 w-5" />
+                  )}
                 </button>
               </div>
+              {/* Live dictation feedback — non-blocking; typing always works */}
+              {speechPhase === 'listening' && (
+                <p className="mt-1.5 flex items-center gap-1.5 text-[11px] text-[#F85149]" role="status" aria-live="polite">
+                  <span className="relative flex h-2 w-2 shrink-0">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#F85149] opacity-75" />
+                    <span className="relative inline-flex h-2 w-2 rounded-full bg-[#F85149]" />
+                  </span>
+                  <span className="truncate">{interimTranscript ? `“${interimTranscript}”` : t.voiceMicListeningHint}</span>
+                </p>
+              )}
+              {speechNoticeMessage && speechPhase !== 'listening' && (
+                <p className="mt-1.5 text-[11px] leading-relaxed text-[#D29922]" role="status">
+                  {speechNoticeMessage}
+                </p>
+              )}
             </motion.div>
 
             {/* Critical banner */}
